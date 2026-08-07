@@ -1,13 +1,7 @@
 name: Build
 
-on:
-  push:
-    branches:
-      - master
-  pull_request:
-    types: [opened, synchronize, reopened]
-
-
+on: workflow_call
+  
 jobs:
   build:
     name: Build and analyze
