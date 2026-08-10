@@ -1,26 +1,20 @@
-name: Build
+name: Security Check
 
 on: 
   workflow_call:
     inputs:
+      # 将 inputs 设置为可选，并自动推导默认值
       project_key:
-        required: true
+        required: false
         type: string
+        default: ${{ github.repository_owner }}_${{ github.event.repository.name }}
       project_name:
-        required: true
+        required: false
         type: string
-      pr_key:
-        required: true
-        type: string
-      pr_branch:
-        required: true
-        type: string
-      pr_base:
-        required: true
-        type: string
+        default: ${{ github.event.repository.name }}
 jobs:
-  build:
-    name: Build and analyze
+  build-and-sast-check:
+    name: Build and Sonar Check
     runs-on: ubuntu-latest
     
     steps:
@@ -44,8 +38,24 @@ jobs:
           path: ~/.m2
           key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
           restore-keys: ${{ runner.os }}-m2
-      - name: Build and analyze
+      - name: Build and Sonar Check
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-        run: mvn -B verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -DskipTests -Dsonar.projectKey=${{ inputs.project_key }} -Dsonar.projectName=${{ inputs.project_name }} -Dsonar.pullrequest.key=${{ inputs.pr_key }} -Dsonar.pullrequest.branch=${{ inputs.pr_branch }} -Dsonar.pullrequest.base=${{ inputs.pr_base }}
+        run: |
+          PR_KEY="${{ github.event.pull_request.number }}"
+          PR_BRANCH="${{ github.event.pull_request.head.ref }}"
+          PR_BASE="${{ github.event.pull_request.base.ref }}"
+
+          MAVEN_CMD = "mvn -B verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -DskipTests"
+          MAVEN_CMD = $MAVEN_CMD -Dsonar.projectKey=${{ inputs.project_key }}"
+          MAVEN_CMD="$MAVEN_CMD -Dsonar.projectName=${{ inputs.project_name }}"
+
+          # 如果是 Pull Request 事件，追加 PR 分析参数
+          if [ -n "$PR_KEY" ]; then
+            MAVEN_CMD="$MAVEN_CMD -Dsonar.pullrequest.key=$PR_KEY"
+            MAVEN_CMD="$MAVEN_CMD -Dsonar.pullrequest.branch=$PR_BRANCH"
+            MAVEN_CMD="$MAVEN_CMD -Dsonar.pullrequest.base=$PR_BASE"
+          fi
+
+          eval $MAVEN_CMD
