@@ -47,8 +47,8 @@ jobs:
           PR_BRANCH="${{ github.event.pull_request.head.ref }}"
           PR_BASE="${{ github.event.pull_request.base.ref }}"
 
-          MAVEN_CMD = "mvn -B verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -DskipTests"
-          MAVEN_CMD = $MAVEN_CMD -Dsonar.projectKey=${{ inputs.project_key }}"
+          MAVEN_CMD="mvn -B verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -DskipTests"
+          MAVEN_CMD="$MAVEN_CMD -Dsonar.projectKey=${{ inputs.project_key }}"
           MAVEN_CMD="$MAVEN_CMD -Dsonar.projectName=${{ inputs.project_name }}"
 
           # 如果是 Pull Request 事件，追加 PR 分析参数
