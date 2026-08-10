@@ -69,11 +69,16 @@ jobs:
           scan-ref: '.'
           scanners: 'vuln'
           format: 'template'
-          template: '@contrib/sonarqube.tpl'  # 使用 Trivy 内置的 SonarQube 模板
-          output: 'trivy-results.json'
+          template: '@contrib/gitlab.tpl' # 或使用内置/自定义的 markdown 模板
+          output: 'trivy-report.md'
           ignore-unfixed: true        # （可选）仅报告有修复方案的漏洞
         continue-on-error: true       # 避免发现漏洞时中途卡死流程，保证结果导入 SonarQube
-        
+      # 2. 渲染到 GitHub Actions 的 Step Summary (页面右侧/底部面板)
+      - name: Publish Trivy Output to Step Summary
+        run: |
+          echo "## 🛡️ Trivy SCA Scan Results" >> $GITHUB_STEP_SUMMARY
+          cat trivy-report.md >> $GITHUB_STEP_SUMMARY
+        if: always()
       - name: Cache SonarQube packages
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -100,7 +105,7 @@ jobs:
           MAVEN_CMD="mvn -B verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -DskipTests"
           MAVEN_CMD="$MAVEN_CMD -Dsonar.projectKey=${{ inputs.project_key }}"
           MAVEN_CMD="$MAVEN_CMD -Dsonar.projectName=${{ inputs.project_name }}"
-          MAVEN_CMD="$MAVEN_CMD -Dsonar.externalIssuesReportPaths=trivy-results.json"
+          # MAVEN_CMD="$MAVEN_CMD -Dsonar.externalIssuesReportPaths=trivy-results.json"
 
           # 如果是 Pull Request 事件，追加 PR 分析参数
           if [ -n "$PR_KEY" ]; then
