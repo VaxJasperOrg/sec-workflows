@@ -56,6 +56,7 @@ jobs:
         with:
           scan-type: 'fs'             # 扫描文件系统中的依赖库（如 package.json, pom.xml, go.mod 等）
           scan-ref: '.'
+          scanners: 'vuln'
           format: 'template'
           template: '@${{ github.workspace }}/contrib/sonarqube.tpl'  # 使用 Trivy 内置的 SonarQube 模板
           output: 'trivy-results.json'
