@@ -84,8 +84,7 @@ jobs:
           jobs:
             call-security-central:
               uses: {ORG_NAME}/sec-workflows/.github/workflows/sonar_sast_check.yml@main
-              with:
-                fail-on-severity: 'high'
+              secrets: inherit
           """
 
           def get_all_org_repos():
@@ -110,7 +109,7 @@ jobs:
               default_branch = repo.get('default_branch', 'main')
 
               # 跳过：归档仓库、中央安全仓库本身
-              if repo.get('archived', False) or repo_name == 'org-security-tools':
+              if repo.get('archived', False) or repo_name == 'sec-workflows':
                   return
 
               file_path = ".github/workflows/security.yml"
