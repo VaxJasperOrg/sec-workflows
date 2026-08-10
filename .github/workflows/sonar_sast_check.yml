@@ -69,7 +69,7 @@ jobs:
           scan-ref: '.'
           scanners: 'vuln'
           format: 'template'
-          template: '@${{ github.workspace }}/contrib/sonarqube.tpl'  # 使用 Trivy 内置的 SonarQube 模板
+          template: '@contrib/sonarqube.tpl'  # 使用 Trivy 内置的 SonarQube 模板
           output: 'trivy-results.json'
           ignore-unfixed: true        # （可选）仅报告有修复方案的漏洞
         continue-on-error: true       # 避免发现漏洞时中途卡死流程，保证结果导入 SonarQube
