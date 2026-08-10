@@ -21,12 +21,6 @@ jobs:
   build-and-sast-check:
     name: Build and Sonar Check
     runs-on: ubuntu-latest
-
-    # 显式声明所需的最小权限集，解决 403 报错
-    permissions:
-      contents: read
-      pull-requests: write
-      issues: write
     
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
