@@ -12,6 +12,11 @@ on:
         required: false
         type: string
         default: ${{ github.event.repository.name }}
+    secrets:
+      SONAR_HOST_URL:
+        required: false
+      SONAR_TOKEN:
+        required: false
 jobs:
   build-and-sast-check:
     name: Build and Sonar Check
