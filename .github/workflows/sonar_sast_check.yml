@@ -26,6 +26,30 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
+      # 关键步骤：在 Maven 扫描前，通过 API 确保项目存在且主分支为 main
+      - name: Ensure SonarQube Project Exists
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        run: |
+          PROJECT_KEY="${{ inputs.project_key }}"
+          PROJECT_NAME="${{ inputs.project_name }}"
+          TARGET_BRANCH="${{ github.event.pull_request.base.ref || github.ref_name }}"
+
+          echo "Checking if project $PROJECT_KEY exists in SonarQube..."
+          
+          # 1. 查询项目是否存在
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -u "$SONAR_TOKEN:" "$SONAR_HOST_URL/api/projects/search?projects=$PROJECT_KEY")
+
+          # 2. 如果项目不存在 (HTTP 200 但 search 返回 empty，或者返回 404)，则调用 API 显式创建
+          # 注意：search 接口无论项目在不在通常都回 200，我们可以校验 JSON 内容或直接调用 create 接口（已存在会回 400，可ignore）
+          
+          echo "Ensuring project exists with mainBranch=$TARGET_BRANCH..."
+          curl -s -X POST -u "$SONAR_TOKEN:" \
+            "$SONAR_HOST_URL/api/projects/create" \
+            -d "project=$PROJECT_KEY" \
+            -d "name=$PROJECT_NAME" \
+            -d "mainBranch=$TARGET_BRANCH" || true
       - name: Set up JDK 17
         uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
         with:
