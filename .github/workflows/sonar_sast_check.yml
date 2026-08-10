@@ -50,6 +50,17 @@ jobs:
             -d "project=$PROJECT_KEY" \
             -d "name=$PROJECT_NAME" \
             -d "mainBranch=$TARGET_BRANCH" || true
+      
+      - name: Set up JDK 17
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
+        with:
+          java-version: 17
+          distribution: 'zulu' # Alternative distribution options are available.
+          cache: 'maven' # 启用 Maven 本地依赖缓存
+      # 3. 预下载项目依赖到本地 ~/.m2（避免 Trivy 扫描时请求 Maven 远程服务器）
+      - name: Resolve Maven dependencies
+        run: mvn dependency:go-offline -B
+        
       # 2. 运行 Trivy 进行依赖项 SCA 扫描，并生成 SonarQube 兼容格式的报告
       - name: Run Trivy SCA Scan (SonarQube format)
         uses: aquasecurity/trivy-action@master
@@ -62,23 +73,21 @@ jobs:
           output: 'trivy-results.json'
           ignore-unfixed: true        # （可选）仅报告有修复方案的漏洞
         continue-on-error: true       # 避免发现漏洞时中途卡死流程，保证结果导入 SonarQube
-      - name: Set up JDK 17
-        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
-        with:
-          java-version: 17
-          distribution: 'zulu' # Alternative distribution options are available.
+        
       - name: Cache SonarQube packages
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.sonar/cache
           key: ${{ runner.os }}-sonar
           restore-keys: ${{ runner.os }}-sonar
+          
       - name: Cache Maven packages
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.m2
           key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
           restore-keys: ${{ runner.os }}-m2
+          
       - name: Build and Sonar Check
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
