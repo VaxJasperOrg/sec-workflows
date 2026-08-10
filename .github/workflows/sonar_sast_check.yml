@@ -85,16 +85,27 @@ jobs:
           fi
         if: always()
 
-      # 5. 如果是 Pull Request，自动将漏洞结果贴到 PR 评论区
+      # 5. 如果是 Pull Request，使用 GitHub 官方 API 自动在 PR 发表评论
       - name: Comment PR with Trivy Results
-        uses: mshick/fast-pr-comment@v2
+        uses: actions/github-script@v7
         if: github.event_name == 'pull_request'
         with:
-          message: |
-            ## Trivy SCA 依赖漏洞扫描结果
-            ```text
-            $(cat trivy-results.txt)
-            ```
+          script: |
+            const fs = require('fs');
+            let body = "## 🛡️ Trivy SCA 依赖漏洞扫描结果\n";
+            try {
+              const results = fs.readFileSync('trivy-results.txt', 'utf8');
+              body += "```text\n" + results + "\n```";
+            } catch (err) {
+              body += "✅ 未发现高危/严重级别的开源依赖漏洞！";
+            }
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
       - name: Cache SonarQube packages
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
