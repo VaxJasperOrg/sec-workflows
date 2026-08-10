@@ -68,17 +68,33 @@ jobs:
           scan-type: 'fs'             # 扫描文件系统中的依赖库（如 package.json, pom.xml, go.mod 等）
           scan-ref: '.'
           scanners: 'vuln'
-          format: 'template'
-          template: '@contrib/gitlab.tpl' # 或使用内置/自定义的 markdown 模板
-          output: 'trivy-report.md'
+          format: 'table'                  # 使用原生 table 格式
+          output: 'trivy-results.txt'      # 导出到文本文件
           ignore-unfixed: true        # （可选）仅报告有修复方案的漏洞
         continue-on-error: true       # 避免发现漏洞时中途卡死流程，保证结果导入 SonarQube
-      # 2. 渲染到 GitHub Actions 的 Step Summary (页面右侧/底部面板)
-      - name: Publish Trivy Output to Step Summary
+      # 4. 渲染结果到 GitHub Actions 详情页 (Job Summary)
+      - name: Publish Trivy Scan to Job Summary
         run: |
-          echo "## 🛡️ Trivy SCA Scan Results" >> $GITHUB_STEP_SUMMARY
-          cat trivy-report.md >> $GITHUB_STEP_SUMMARY
+          echo "##  Trivy SCA 依赖漏洞扫描报告 " >> $GITHUB_STEP_SUMMARY
+          if [ -s trivy-results.txt ]; then
+            echo '```text' >> $GITHUB_STEP_SUMMARY
+            cat trivy-results.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ 未发现高危/严重级别的开源依赖漏洞！" >> $GITHUB_STEP_SUMMARY
+          fi
         if: always()
+
+      # 5. 如果是 Pull Request，自动将漏洞结果贴到 PR 评论区
+      - name: Comment PR with Trivy Results
+        uses: mshick/fast-pr-comment@v2
+        if: github.event_name == 'pull_request'
+        with:
+          message: |
+            ## Trivy SCA 依赖漏洞扫描结果
+            ```text
+            $(cat trivy-results.txt)
+            ```
       - name: Cache SonarQube packages
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
