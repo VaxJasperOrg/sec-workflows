@@ -83,6 +83,7 @@ jobs:
 
           jobs:
             call-security-central:
+              name: Central Security Gate
               uses: {ORG_NAME}/sec-workflows/.github/workflows/sonar_sast_check.yml@main
               secrets: inherit
           """
