@@ -52,7 +52,7 @@ jobs:
           scan-ref: '.'
           scanners: 'vuln,secret'
           exit-code: '1'     # 检测到漏洞返回非0退出码，可以触发job failure
-          severity: 'HIGH, CRITICAL'   # 质量门阈值
+          severity: 'CRITICAL,HIGH'   # 质量门阈值
           format: 'table'                  # 使用原生 table 格式
           output: 'trivy-results.txt'      # 导出到文本文件
           ignore-unfixed: true        # （可选）仅报告有修复方案的漏洞
