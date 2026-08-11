@@ -46,7 +46,7 @@ jobs:
         
       # 2. 运行 Trivy 进行依赖项 SCA 扫描，并生成 SonarQube 兼容格式的报告
       - name: Run Trivy SCA Scan (Table)
-        uses: aquasecurity/trivy-action@0.29.0  
+        uses: aquasecurity/trivy-action@v0.35.0  
         with:
           scan-type: 'fs'             # 扫描文件系统中的依赖库（如 package.json, pom.xml, go.mod 等）
           scan-ref: '.'
@@ -59,7 +59,7 @@ jobs:
         continue-on-error: true       # 避免发现漏洞时中途卡死流程，保证结果导入 SonarQube
 
       - name: Run Trivy SCA Scan (SARIF output)
-        uses: aquasecurity/trivy-action@0.29.0
+        uses: aquasecurity/trivy-action@v0.35.0
         with:
           scan-type: 'fs'
           scan-ref: '.'
