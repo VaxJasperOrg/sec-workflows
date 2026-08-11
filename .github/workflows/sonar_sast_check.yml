@@ -33,22 +33,39 @@ jobs:
           java-version: 17
           distribution: 'zulu' # Alternative distribution options are available.
           cache: 'maven' # 启用 Maven 本地依赖缓存
+      - name: Cache SonarQube packages
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: ${{ runner.os }}-sonar
           
-      # 3. 预下载项目依赖到本地 ~/.m2（避免 Trivy 扫描时请求 Maven 远程服务器）
-      - name: Resolve Maven dependencies
-        run: mvn dependency:go-offline -B
+      # # 3. 预下载项目依赖到本地 ~/.m2（避免 Trivy 扫描时请求 Maven 远程服务器）
+      # - name: Resolve Maven dependencies
+      #   run: mvn dependency:go-offline -B
         
       # 2. 运行 Trivy 进行依赖项 SCA 扫描，并生成 SonarQube 兼容格式的报告
-      - name: Run Trivy SCA Scan (SonarQube format)
-        uses: aquasecurity/trivy-action@master
+      - name: Run Trivy SCA Scan (Table)
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402250b6e19ac18b39217c  # v0.28.0 (固定版本)
         with:
           scan-type: 'fs'             # 扫描文件系统中的依赖库（如 package.json, pom.xml, go.mod 等）
           scan-ref: '.'
-          scanners: 'vuln'
+          scanners: 'vuln,secret'
           format: 'table'                  # 使用原生 table 格式
           output: 'trivy-results.txt'      # 导出到文本文件
           ignore-unfixed: true        # （可选）仅报告有修复方案的漏洞
         continue-on-error: true       # 避免发现漏洞时中途卡死流程，保证结果导入 SonarQube
+
+      - name: Run Trivy SCA Scan (SARIF output)
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402250b6e19ac18b39217c # v0.28.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          scanners: 'vuln'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          ignore-unfixed: true
+        continue-on-error: true
         
       # 4. 渲染结果到 GitHub Actions 详情页 (Job Summary)
       - name: Publish Trivy Scan to Job Summary
@@ -63,19 +80,8 @@ jobs:
           fi
         if: always()
       
-      - name: Cache SonarQube packages
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ~/.sonar/cache
-          key: ${{ runner.os }}-sonar
-          restore-keys: ${{ runner.os }}-sonar
+
           
-      - name: Cache Maven packages
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ~/.m2
-          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
-          restore-keys: ${{ runner.os }}-m2
 
         # 关键步骤：在 Maven 扫描前，通过 API 确保项目存在且主分支为 main
       - name: Ensure SonarQube Project Exists
