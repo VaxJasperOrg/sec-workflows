@@ -56,18 +56,18 @@ jobs:
           format: 'table'                  # 使用原生 table 格式
           output: 'trivy-results.txt'      # 导出到文本文件
           ignore-unfixed: true        # （可选）仅报告有修复方案的漏洞
-        continue-on-error: true       # 避免发现漏洞时中途卡死流程，保证结果导入 SonarQube
+        continue-on-error: true       
 
-      - name: Run Trivy SCA Scan (SARIF output)
-        uses: aquasecurity/trivy-action@v0.35.0
-        with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          scanners: 'vuln'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          ignore-unfixed: true
-        continue-on-error: true
+      # - name: Run Trivy SCA Scan (SARIF output)
+      #   uses: aquasecurity/trivy-action@v0.35.0
+      #   with:
+      #     scan-type: 'fs'
+      #     scan-ref: '.'
+      #     scanners: 'vuln'
+      #     format: 'sarif'
+      #     output: 'trivy-results.sarif'
+      #     ignore-unfixed: true
+      #   continue-on-error: true
         
       # 4. 渲染结果到 GitHub Actions 详情页 (Job Summary)
       - name: Publish Trivy Scan to Job Summary
