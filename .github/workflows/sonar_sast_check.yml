@@ -231,7 +231,7 @@ jobs:
           PR_BASE="${{ github.event.pull_request.base.ref }}"
 
           MAVEN_CMD="mvn -B verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -DskipTests"
-          MAVEN_CMD="$MAVEN_CMD -Dsonar.host.url=${ SONAR_HOST_URL }"
+          MAVEN_CMD="$MAVEN_CMD -Dsonar.host.url=${SONAR_HOST_URL}"
           MAVEN_CMD="$MAVEN_CMD -Dsonar.login=${SONAR_TOKEN}"
           MAVEN_CMD="$MAVEN_CMD -Dsonar.projectKey=${EFFECTIVE_PROJECT_KEY}"
           MAVEN_CMD="$MAVEN_CMD -Dsonar.projectName=${EFFECTIVE_PROJECT_NAME}"
