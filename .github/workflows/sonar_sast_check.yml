@@ -236,7 +236,7 @@ jobs:
           MAVEN_CMD="$MAVEN_CMD -Dsonar.projectKey=${EFFECTIVE_PROJECT_KEY}"
           MAVEN_CMD="$MAVEN_CMD -Dsonar.projectName=${EFFECTIVE_PROJECT_NAME}"
           MAVEN_CMD="$MAVEN_CMD -Dsonar.sources=${{ steps.detect.outputs.sources }}"
-          MAVEN_CMD="$MAVEN_CMD -Dsonar.exclusions=**/node_modules/**,**/venv/**,**/target/**,**/*.min.js,proxy/**"
+          MAVEN_CMD="$MAVEN_CMD -Dsonar.exclusions=**/node_modules/**,**/venv/**,**/*.min.js,proxy/**"
 
           # 【新增关键参数】指示 Maven 插件在客户端等待服务端计算 Quality Gate 状态
           if [ "${{ env.QUALITY_GATE_FAIL }}" = "true" ]; then
