@@ -232,11 +232,11 @@ jobs:
 
           MAVEN_CMD="mvn -B verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -DskipTests"
           MAVEN_CMD="$MAVEN_CMD -Dsonar.host.url=${SONAR_HOST_URL}"
-          MAVEN_CMD="$MAVEN_CMD -Dsonar.login=${SONAR_TOKEN}"
+          MAVEN_CMD="$MAVEN_CMD -Dsonar.token=${SONAR_TOKEN}"
           MAVEN_CMD="$MAVEN_CMD -Dsonar.projectKey=${EFFECTIVE_PROJECT_KEY}"
           MAVEN_CMD="$MAVEN_CMD -Dsonar.projectName=${EFFECTIVE_PROJECT_NAME}"
           MAVEN_CMD="$MAVEN_CMD -Dsonar.sources=${{ steps.detect.outputs.sources }}"
-          MAVEN_CMD="$MAVEN_CMD -Dsonar.exclusions=**/node_modules/**,**/venv/**,**/*.min.js,proxy/**"
+          # MAVEN_CMD="$MAVEN_CMD -Dsonar.exclusions=**/node_modules/**,**/venv/**,**/*.min.js,proxy/**"
 
           # 【新增关键参数】指示 Maven 插件在客户端等待服务端计算 Quality Gate 状态
           if [ "${{ env.QUALITY_GATE_FAIL }}" = "true" ]; then
