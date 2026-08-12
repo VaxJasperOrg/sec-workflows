@@ -127,7 +127,7 @@ jobs:
 
           # 动态拼接需要扫描的源码路径
           DETECTED_DIRS=""
-          for dir in src src/main/java src/python src/javascript lib app; do
+          for dir in src/main/java src/python src/javascript lib app; do
             if [ -d "$dir" ]; then
               DETECTED_DIRS="${DETECTED_DIRS:+${DETECTED_DIRS},}${dir}"
             fi
