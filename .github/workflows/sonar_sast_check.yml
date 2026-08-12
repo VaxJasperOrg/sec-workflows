@@ -37,11 +37,18 @@ on:
   # push:
   #   branches: [ main ]
   workflow_dispatch: 
+    inputs:
+      quality_gate_fail:
+        description: 'Fail pipeline on Quality Gate failure?'
+        required: false
+        type: boolean
+        default: true
 env:
   EFFECTIVE_PROJECT_KEY: ${{ inputs.project_key || format('{0}_{1}', github.repository_owner, github.event.repository.name) }}
   EFFECTIVE_PROJECT_NAME: ${{ inputs.project_name || github.event.repository.name }}
   SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL || 'https://appscan.vax-s.com' }}   # 生产环境sonar host地址
   SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+  QUALITY_GATE_FAIL: ${{ inputs.quality_gate_fail != false && github.event.inputs.quality_gate_fail != 'false' }}
   # CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
   # CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
   CF_PROXY_PORT: '8888'
@@ -231,6 +238,11 @@ jobs:
           MAVEN_CMD="$MAVEN_CMD -Dsonar.sources=${{ steps.detect.outputs.sources }}"
           MAVEN_CMD="$MAVEN_CMD -Dsonar.exclusions=**/node_modules/**,**/venv/**,**/target/**,**/*.min.js,proxy/**"
 
+          # 【新增关键参数】指示 Maven 插件在客户端等待服务端计算 Quality Gate 状态
+          if [ "${{ env.QUALITY_GATE_FAIL }}" = "true" ]; then
+            MAVEN_CMD="$MAVEN_CMD -Dsonar.qualitygate.wait=true"
+          fi
+          
           if [ -n "$PR_KEY" ]; then
             MAVEN_CMD="$MAVEN_CMD -Dsonar.pullrequest.key=$PR_KEY -Dsonar.pullrequest.branch=$PR_BRANCH -Dsonar.pullrequest.base=$PR_BASE"
           fi
@@ -251,7 +263,16 @@ jobs:
             -Dsonar.sourceEncoding=UTF-8
             -Dsonar.exclusions=**/node_modules/**,**/venv/**,**/target/**,**/*.min.js,proxy/**
             ${{ github.event.pull_request.number && format('-Dsonar.pullrequest.key={0} -Dsonar.pullrequest.branch={1} -Dsonar.pullrequest.base={2}', github.event.pull_request.number, github.event.pull_request.head.ref, github.event.pull_request.base.ref) || '' }}
-
+      
+      # 【新增关键 Step】针对 CLI 模式显式触发 Quality Gate Check 检查并判定是否断言失败
+      - name: SonarQube Quality Gate Check (Non-Maven)
+        if: steps.detect.outputs.has_maven != 'true' && env.QUALITY_GATE_FAIL == 'true'
+        id: quality-gate-check
+        uses: SonarSource/sonarqube-quality-gate-action@v1
+        timeout-minutes: 5
+        env:
+          SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
+          SONAR_TOKEN: ${{ env.SONAR_TOKEN }}
       # --------------------------------------------------------
       # Step 5: 后置清理与总结报告
       # --------------------------------------------------------
