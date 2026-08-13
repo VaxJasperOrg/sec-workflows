@@ -208,6 +208,7 @@ jobs:
           key: ${{ runner.os }}-sonar
           restore-keys: ${{ runner.os }}-sonar
 
+      # 关键步骤：在扫描前，确保sonarquebe已经有对应的project
       - name: Ensure SonarQube Project Exists
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -217,11 +218,21 @@ jobs:
           PROJECT_NAME="${{ inputs.project_name }}"
           TARGET_BRANCH="${{ github.event.pull_request.base.ref || github.ref_name }}"
 
+          echo "Checking if project $PROJECT_KEY exists in SonarQube..."
+          
+          # 1. 查询项目是否存在
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -u "$SONAR_TOKEN:" "$SONAR_HOST_URL/api/projects/search?projects=$PROJECT_KEY")
+
+          # 2. 如果项目不存在 (HTTP 200 但 search 返回 empty，或者返回 404)，则调用 API 显式创建
+          # 注意：search 接口无论项目在不在通常都回 200，我们可以校验 JSON 内容或直接调用 create 接口（已存在会回 400，可ignore）
+          
+          echo "Ensuring project exists with mainBranch=$TARGET_BRANCH..."
           curl -s -X POST -u "$SONAR_TOKEN:" \
             "$SONAR_HOST_URL/api/projects/create" \
             -d "project=$PROJECT_KEY" \
             -d "name=$PROJECT_NAME" \
             -d "mainBranch=$TARGET_BRANCH" || true
+      
       # 模式 A：包含 Maven/Java 项目 —— 使用 Maven 插件编译并扫描
       - name: Sonar Scan via Maven Plugin (Java / Hybrid)
         if: steps.detect.outputs.has_maven == 'true'
