@@ -216,22 +216,31 @@ jobs:
         run: |
           PROJECT_KEY="${{ inputs.project_key }}"
           PROJECT_NAME="${{ inputs.project_name }}"
-          TARGET_BRANCH="${{ github.event.pull_request.base.ref || github.ref_name }}"
+          # 主分支固定优先取 repository 的默认主分支（如 main/master），避免被 PR 临时分支污染
+          MAIN_BRANCH="${{ github.event.repository.default_branch || 'main' }}"
 
-          echo "Checking if project $PROJECT_KEY exists in SonarQube..."
-          
-          # 1. 查询项目是否存在
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -u "$SONAR_TOKEN:" "$SONAR_HOST_URL/api/projects/search?projects=$PROJECT_KEY")
+          echo "Checking/Ensuring project '$PROJECT_KEY' exists in SonarQube..."
 
-          # 2. 如果项目不存在 (HTTP 200 但 search 返回 empty，或者返回 404)，则调用 API 显式创建
-          # 注意：search 接口无论项目在不在通常都回 200，我们可以校验 JSON 内容或直接调用 create 接口（已存在会回 400，可ignore）
-          
-          echo "Ensuring project exists with mainBranch=$TARGET_BRANCH..."
-          curl -s -X POST -u "$SONAR_TOKEN:" \
+          # 1. 直接尝试创建项目，捕获 HTTP 响应码及响应体
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST -u "$SONAR_TOKEN:" \
             "$SONAR_HOST_URL/api/projects/create" \
-            -d "project=$PROJECT_KEY" \
-            -d "name=$PROJECT_NAME" \
-            -d "mainBranch=$TARGET_BRANCH" || true
+            --data-urlencode "project=$PROJECT_KEY" \
+            --data-urlencode "name=$PROJECT_NAME" \
+            --data-urlencode "mainBranch=$MAIN_BRANCH")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+
+          # 2. 判断返回状态
+          if [ "$HTTP_CODE" -eq 200 ]; then
+            echo "Successfully created project '$PROJECT_KEY' with mainBranch='$MAIN_BRANCH'."
+          elif [ "$HTTP_CODE" -eq 400 ] && echo "$BODY" | grep -q "already exists"; then
+            echo "Project '$PROJECT_KEY' already exists. Proceeding..."
+          else
+            echo "Error creating SonarQube project! HTTP Code: $HTTP_CODE"
+            echo "Response: $BODY"
+            exit 1
+          fi
       
       # 模式 A：包含 Maven/Java 项目 —— 使用 Maven 插件编译并扫描
       - name: Sonar Scan via Maven Plugin (Java / Hybrid)
