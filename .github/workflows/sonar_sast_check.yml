@@ -408,9 +408,7 @@ jobs:
 
     steps:
       - name: Send Signed DingTalk Notification
-        if: needs.sca-check.result == 'failure' || needs.sast-check.result == 'failure' \
-          || needs.sca-check.outputs.scan_status == 'infra_failed' \
-          || needs.sast-check.outputs.scan_status == 'infra_failed'
+        if: needs.sca-check.result == 'failure' || needs.sast-check.result == 'failure' || needs.sca-check.outputs.scan_status == 'infra_failed' || needs.sast-check.outputs.scan_status == 'infra_failed'
         env:
           DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
           DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET }}
