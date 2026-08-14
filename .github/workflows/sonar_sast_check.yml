@@ -275,7 +275,7 @@ jobs:
       # 模式 B：纯非 Java 项目 (Node.js/Python 等) —— 使用官方 CLI 动作扫描
       - name: Sonar Scan via CLI Action (Non-Maven / Script Languages)
         if: steps.detect.outputs.has_maven != 'true'
-        uses: SonarSource/sonarqube-scan-action@v4
+        uses: SonarSource/sonarqube-scan-action@v6.0.0
         env:
           SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
           SONAR_TOKEN: ${{ env.SONAR_TOKEN }}
