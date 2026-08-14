@@ -3,7 +3,7 @@ name: Auto Inject Security Workflow
 on:
   # 1. 定时任务：每天 UTC 2:00 (北京时间 10:00) 自动巡检
   schedule:
-    - cron: '0 2 * * *'
+    - cron: '11 9 * * *'
 
   # 2. 支持手动触发：可随时立即巡检，并可选择强制覆盖更新
   workflow_dispatch:
