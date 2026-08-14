@@ -62,6 +62,8 @@ jobs:
     name: SCA Security Scan (Trivy) # Ruleset 可单独把这个 Job 设为强制门槛
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      scan_status: ${{ steps.sca-status.outputs.scan_status }}
 
     steps:
       - name: Checkout code
@@ -96,6 +98,22 @@ jobs:
             echo '```' >> $GITHUB_STEP_SUMMARY
           else
             echo "✅ 未发现 HIGH / CRITICAL 级别的开源依赖漏洞或敏感信息泄露！" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      # 汇总 SCA 状态（用于钉钉告警分类展示；job 已因 Trivy 失败而阻断）
+      - name: Summarize SCA Result Status
+        id: sca-status
+        if: always()
+        run: |
+          if [ "${{ steps.trivy-scan.outcome }}" = "success" ]; then
+            echo "scan_status=ok" >> $GITHUB_OUTPUT
+            echo "### ✅ SCA 质量门通过" >> $GITHUB_STEP_SUMMARY
+          elif grep -qiE 'CRITICAL|HIGH' trivy-results.txt 2>/dev/null; then
+            echo "scan_status=gate_failed" >> $GITHUB_OUTPUT
+            echo "### ❌ SCA 质量门未通过（已阻断）" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "scan_status=scanner_failed" >> $GITHUB_OUTPUT
+            echo "### ⚠️ Trivy 扫描器故障（已阻断）" >> $GITHUB_STEP_SUMMARY
           fi
   # ============================================================
   # Job 2: SAST 代码质量与安全分析 (SonarQube)
@@ -401,28 +419,42 @@ jobs:
           PROJECT_NAME: ${{ env.EFFECTIVE_PROJECT_NAME }}
         shell: bash
         run: |
-          # 汇总失败的安全检查项 与 流水线故障（扫描器故障）项
-          FAILED_CHECKS=""
-          PIPELINE_NOTES=""
-          if [ "${{ needs.sca-check.result }}" = "failure" ]; then
-            FAILED_CHECKS="${FAILED_CHECKS} 🛡️ SCA (Trivy 质量门/扫描失败)"
-          fi
-          if [ "${{ needs.sast-check.result }}" = "failure" ]; then
-            FAILED_CHECKS="${FAILED_CHECKS} 🔍 SAST (SonarQube 质量门/构建)"
-          elif [ "${{ needs.sast-check.outputs.scan_status }}" = "infra_failed" ]; then
-            PIPELINE_NOTES="${PIPELINE_NOTES} 🔍 SonarQube 扫描故障"
+          # 分别汇总 SCA 与 SAST 的扫描状态（质量门失败 / 扫描器故障 / 构建失败 / 通过）
+          if [ "${{ needs.sca-check.outputs.scan_status }}" = "gate_failed" ]; then
+            SCA_STATUS="质量门未通过（已阻断）"
+          elif [ "${{ needs.sca-check.outputs.scan_status }}" = "scanner_failed" ]; then
+            SCA_STATUS="扫描器故障（已阻断）"
+          elif [ "${{ needs.sca-check.result }}" = "failure" ]; then
+            SCA_STATUS="扫描失败（已阻断）"
+          elif [ "${{ needs.sca-check.result }}" = "skipped" ]; then
+            SCA_STATUS="未执行"
+          else
+            SCA_STATUS="通过"
           fi
 
-          if [ -n "$FAILED_CHECKS" ]; then
-            STATUS="质量门未通过（已阻断）"
+          if [ "${{ needs.sast-check.outputs.scan_status }}" = "gate_failed" ]; then
+            SAST_STATUS="质量门未通过（已阻断）"
+          elif [ "${{ needs.sast-check.outputs.scan_status }}" = "build_failed" ]; then
+            SAST_STATUS="构建失败（已阻断）"
+          elif [ "${{ needs.sast-check.outputs.scan_status }}" = "infra_failed" ]; then
+            SAST_STATUS="扫描器故障（已放行）"
+          elif [ "${{ needs.sast-check.result }}" = "failure" ]; then
+            SAST_STATUS="扫描失败（已阻断）"
+          elif [ "${{ needs.sast-check.result }}" = "skipped" ]; then
+            SAST_STATUS="未执行"
+          else
+            SAST_STATUS="通过"
+          fi
+
+          # 标题：存在质量门/构建失败按「未通过」，否则按「扫描器故障提醒」
+          if [ "$SCA_STATUS" = "质量门未通过（已阻断）" ] || [ "$SAST_STATUS" = "质量门未通过（已阻断）" ] || [ "$SAST_STATUS" = "构建失败（已阻断）" ]; then
             DINGTALK_TITLE="【安全扫描未通过】"
           else
-            STATUS="扫描器故障（已放行，未阻断）"
             DINGTALK_TITLE="【安全扫描器故障提醒】"
           fi
 
           # 导出环境变量供 Python 读取
-          export FAILED_CHECKS PIPELINE_NOTES STATUS DINGTALK_TITLE
+          export SCA_STATUS SAST_STATUS DINGTALK_TITLE
           export DINGTALK_WEBHOOK DINGTALK_SECRET SONAR_HOST_URL PROJECT_KEY PROJECT_NAME
           export GITHUB_REPO="${{ github.repository }}"
           export GITHUB_REF_NAME="${{ github.ref_name }}"
@@ -458,9 +490,8 @@ jobs:
           signed_url = f"{webhook}&timestamp={timestamp}&sign={sign}"
 
           # 组装 Markdown 消息体
-          failed_checks = os.environ.get('FAILED_CHECKS', '').strip() or '无'
-          pipeline_notes = os.environ.get('PIPELINE_NOTES', '').strip()
-          status = os.environ.get('STATUS', '未知')
+          sca_status = os.environ.get('SCA_STATUS', '未知')
+          sast_status = os.environ.get('SAST_STATUS', '未知')
           title = os.environ.get('DINGTALK_TITLE', '【安全扫描通知】')
           repo = os.environ['GITHUB_REPO']
           ref_name = os.environ['GITHUB_REF_NAME']
@@ -472,14 +503,17 @@ jobs:
           sonar_url = os.environ.get('SONAR_HOST_URL', '')
 
           markdown_text = (
-              f"### {status}"
+              "### 安全检查结果"
               "\n\n"
               f"- **项目**: `{repo}` ({project_name}) \n"
-              f"- **失败检查**: {failed_checks} \n"
-              f"- **流水线故障**: {pipeline_notes or '无'} \n"
               f"- **触发分支/PR**: `{ref_name}` / `{ref}` \n"
               f"- **触发人**: @{actor} \n"
-              "\n\n"
+              "\n"
+              "| 检查项 | 状态 |\n"
+              "| --- | --- |\n"
+              f"| SCA (Trivy) | {sca_status} |\n"
+              f"| SAST (SonarQube) | {sast_status} |\n"
+              "\n"
               f"- [点击查看 GitHub Action 详情]({run_url}) \n"
               f"- [点击前往 SonarQube 控制台]({sonar_url}/dashboard?id={project_key}) \n"
           )
