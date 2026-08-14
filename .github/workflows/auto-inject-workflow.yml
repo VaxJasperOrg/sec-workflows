@@ -55,12 +55,17 @@ jobs:
           GITHUB_TOKEN: ${{ steps.generate-app-token.outputs.token }}
           ORG_NAME: ${{ github.repository_owner }}
           FORCE_UPDATE: ${{ github.event.inputs.force_update || 'false' }}
+          DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
+          DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET }}
         run: |
           python - << 'EOF'
           import os
           import base64
           import requests
           import time
+          import hmac
+          import hashlib
+          import urllib.parse
 
           GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
           ORG_NAME = os.environ.get("ORG_NAME")
@@ -87,6 +92,9 @@ jobs:
               uses: {ORG_NAME}/sec-workflows/.github/workflows/sonar_sast_check.yml@main
               secrets: inherit
           """
+
+          # 记录本次巡检中发现"未部署安全检查 workflow"的仓库
+          MISSING_WORKFLOW_REPOS = []
 
           def get_all_org_repos():
               """分页获取组织下的所有仓库"""
@@ -127,6 +135,9 @@ jobs:
                   else:
                       sha = res.json().get('sha')
                       print(f"[*] [{repo_name}] 已经存在 security.yml，将进行覆盖更新...")
+              else:
+                  # 仓库当前未部署安全检查 workflow，记录用于钉钉告警
+                  MISSING_WORKFLOW_REPOS.append(repo_name)
 
               # 2. 构造 API 请求 Body
               content_b64 = base64.b64encode(WORKFLOW_TEMPLATE.encode('utf-8')).decode('utf-8')
@@ -149,6 +160,53 @@ jobs:
               else:
                   print(f"[!] [{repo_name}] 注入失败 ({put_res.status_code}): {put_res.json().get('message')}")
 
+          def send_dingtalk_alert(total_repos, skipped_count, missing_repos):
+              """当存在未部署安全检查 workflow 的仓库时，通过钉钉推送告警"""
+              webhook = os.environ.get("DINGTALK_WEBHOOK", "").strip()
+              secret = os.environ.get("DINGTALK_SECRET", "").strip()
+
+              if not webhook or not secret:
+                  print("[!] 未配置 DINGTALK_WEBHOOK / DINGTALK_SECRET，跳过钉钉告警。")
+                  return
+
+              # 钉钉加签
+              timestamp = str(round(time.time() * 1000))
+              secret_enc = secret.encode('utf-8')
+              string_to_sign = f'{timestamp}\n{secret}'
+              string_to_sign_enc = string_to_sign.encode('utf-8')
+              hmac_code = hmac.new(secret_enc, string_to_sign_enc, digestmod=hashlib.sha256).digest()
+              sign = urllib.parse.quote_plus(base64.b64encode(hmac_code))
+              signed_url = f"{webhook}&timestamp={timestamp}&sign={sign}"
+
+              # 组装 Markdown 消息体
+              repo_list = "\n".join(f"- `{name}`" for name in missing_repos)
+              markdown_text = (
+                  "### 🔔 安全检查 Workflow 未部署告警"
+                  "\n\n"
+                  f"- **触发时间**: {time.strftime('%Y-%m-%d %H:%M:%S')} \n"
+                  f"- **组织**: `{ORG_NAME}` \n"
+                  f"- **本次巡检发现的仓库总数**: {total_repos} \n"
+                  f"- **已跳过(归档/中央仓库)**: {skipped_count} \n"
+                  f"- **未部署安全检查 workflow 的仓库数**: {len(missing_repos)} \n"
+                  "\n"
+                  f"**未部署仓库清单**: \n{repo_list}"
+              )
+
+              payload = {
+                  "msgtype": "markdown",
+                  "markdown": {
+                      "title": "【安全巡检】存在未部署安全检查 Workflow 的仓库",
+                      "text": markdown_text
+                  }
+              }
+
+              req = requests.post(signed_url, json=payload, timeout=30)
+              resp = req.json() if req.status_code == 200 else None
+              if resp and resp.get("errcode") == 0:
+                  print("[+] 钉钉告警发送成功！")
+              else:
+                  print(f"[!] 钉钉告警发送失败: {req.status_code} - {req.text}")
+
           if __name__ == "__main__":
               if not GITHUB_TOKEN:
                   print("[!] 错误：未获取到有效的 GITHUB_TOKEN！")
@@ -158,10 +216,20 @@ jobs:
               all_repos = get_all_org_repos()
               print(f"[*] 共计检测到 {len(all_repos)} 个仓库。")
 
+              skipped = 0
               for repo in all_repos:
+                  # 跳过：归档仓库、中央安全仓库本身
+                  if repo.get('archived', False) or repo['name'] == 'sec-workflows':
+                      skipped += 1
+                      continue
                   inject_workflow_to_repo(repo)
                   # 延迟 0.2s 防止触发 API 限流
                   time.sleep(0.2)
 
-              print("[*] 组织级安全巡检完成！")
+              print(f"[*] 组织级安全巡检完成！检测到 {len(all_repos)} 个仓库，跳过 {skipped} 个，"
+                    f"未部署安全检查 workflow 的仓库 {len(MISSING_WORKFLOW_REPOS)} 个。")
+
+              # 存在未部署仓库时，推送钉钉告警
+              if MISSING_WORKFLOW_REPOS:
+                  send_dingtalk_alert(len(all_repos), skipped, MISSING_WORKFLOW_REPOS)
           EOF
