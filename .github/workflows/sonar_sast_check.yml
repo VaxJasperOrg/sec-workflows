@@ -413,13 +413,13 @@ jobs:
           sonar_url = os.environ.get('SONAR_HOST_URL', '')
 
           markdown_text = (
-              "### 🚨 安全质量门未通过"
+              "### 安全质量门未通过"
               "\n\n"
               f"- **项目**: `{repo}` ({project_name}) \n"
               f"- **失败检查**: {failed_checks} \n"
               f"- **触发分支/PR**: `{ref_name}` / `{ref}` \n"
               f"- **触发人**: @{actor} \n"
-              f"- **构建状态**: ❌ 质量门未通过 \n"
+              f"- **构建状态**: 质量门未通过 \n"
               "\n\n"
               f"- [点击查看 GitHub Action 详情]({run_url}) \n"
               f"- [点击前往 SonarQube 控制台]({sonar_url}/dashboard?id={project_key}) \n"
