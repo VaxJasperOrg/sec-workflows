@@ -123,8 +123,8 @@ jobs:
               sign = urllib.parse.quote_plus(base64.b64encode(hmac_code))
               signed_url = f"{webhook}&timestamp={timestamp}&sign={sign}"
 
-              # 组装 Markdown 消息体
-              repo_list = "\n".join(f"- `{name}`" for name in missing_repos)
+              # 组装 Markdown 消息体（仓库名带可点击跳转链接）
+              repo_list = "\n".join(f"- [{m['name']}]({m['html_url']})" for m in missing_repos)
               markdown_text = (
                   "### 🔔 安全检查 Workflow 未部署告警"
                   "\n\n"
@@ -182,7 +182,10 @@ jobs:
                       "has_security": has_security
                   })
                   if not has_security:
-                      missing.append(repo_name)
+                      missing.append({
+                          "name": repo_name,
+                          "html_url": repo.get('html_url', f"https://github.com/{ORG_NAME}/{repo_name}")
+                      })
                       print(f"[!] [{repo_name}] 未部署 security.yml")
                   # 延迟 0.2s 防止触发 API 限流
                   time.sleep(0.2)
