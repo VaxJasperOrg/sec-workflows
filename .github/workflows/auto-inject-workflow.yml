@@ -8,8 +8,16 @@ on:
   # 2. 支持手动触发：可随时立即巡检，并可选择强制覆盖更新
   workflow_dispatch:
     inputs:
+      mode:
+        description: '运行模式：scan=仅扫描未部署 security.yml 的仓库并钉钉告警(默认)；inject=扫描并自动注入'
+        required: false
+        type: choice
+        default: scan
+        options:
+          - scan
+          - inject
       force_update:
-        description: '是否强行覆盖已存在的 security.yml (true/false)'
+        description: '仅 inject 模式下生效：是否强行覆盖已存在的 security.yml (true/false)'
         required: false
         default: 'false'
 
@@ -47,29 +55,30 @@ jobs:
           pip install requests
 
       # -------------------------------------------------------------
-      # 3. 运行自动化注入脚本 (使用步骤 1 生成的 App Token)
+      # 3a. 扫描：巡检组织内所有仓库，识别未部署 security.yml 的仓库，
+      #     结果写入 missing_repos.json；存在未部署仓库时推送钉钉告警
       # -------------------------------------------------------------
-      - name: Run Auto Injection Script
+      - name: Scan & Report Missing Security Workflows
+        id: scan-repos
         env:
           # 使用步骤 1 中动态生成的临时 Token
           GITHUB_TOKEN: ${{ steps.generate-app-token.outputs.token }}
           ORG_NAME: ${{ github.repository_owner }}
-          FORCE_UPDATE: ${{ github.event.inputs.force_update || 'false' }}
           DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
           DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET }}
         run: |
           python - << 'EOF'
           import os
-          import base64
+          import json
           import requests
           import time
           import hmac
           import hashlib
+          import base64
           import urllib.parse
 
           GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
           ORG_NAME = os.environ.get("ORG_NAME")
-          FORCE_UPDATE = os.environ.get("FORCE_UPDATE", "false").lower() == "true"
 
           # 如果是 GHE 私有部署，请将 URL 改为 https://<ghe-domain>/api/v3
           GITHUB_API = "https://api.github.com"
@@ -78,23 +87,6 @@ jobs:
               "Authorization": f"Bearer {GITHUB_TOKEN}",
               "Accept": "application/vnd.github+json"
           }
-
-          # 自动注入到业务仓库的 Workflow 模板内容
-          WORKFLOW_TEMPLATE = f"""name: Security Gate
-
-          on:
-            pull_request:
-              branches: [ "main", "master", "release/*" ]
-
-          jobs:
-            call-security-central:
-              name: Central Security Gate
-              uses: {ORG_NAME}/sec-workflows/.github/workflows/sonar_sast_check.yml@main
-              secrets: inherit
-          """
-
-          # 记录本次巡检中发现"未部署安全检查 workflow"的仓库
-          MISSING_WORKFLOW_REPOS = []
 
           def get_all_org_repos():
               """分页获取组织下的所有仓库"""
@@ -112,53 +104,6 @@ jobs:
                   repos.extend(data)
                   page += 1
               return repos
-
-          def inject_workflow_to_repo(repo):
-              repo_name = repo['name']
-              default_branch = repo.get('default_branch', 'main')
-
-              # 跳过：归档仓库、中央安全仓库本身
-              if repo.get('archived', False) or repo_name == 'sec-workflows':
-                  return
-
-              file_path = ".github/workflows/security.yml"
-              url = f"{GITHUB_API}/repos/{ORG_NAME}/{repo_name}/contents/{file_path}"
-
-              # 1. 校验该仓库文件是否已存在
-              res = requests.get(url, headers=HEADERS)
-              sha = None
-              
-              if res.status_code == 200:
-                  if not FORCE_UPDATE:
-                      print(f"[-] [{repo_name}] 已经存在 security.yml，跳过。")
-                      return
-                  else:
-                      sha = res.json().get('sha')
-                      print(f"[*] [{repo_name}] 已经存在 security.yml，将进行覆盖更新...")
-              else:
-                  # 仓库当前未部署安全检查 workflow，记录用于钉钉告警
-                  MISSING_WORKFLOW_REPOS.append(repo_name)
-
-              # 2. 构造 API 请求 Body
-              content_b64 = base64.b64encode(WORKFLOW_TEMPLATE.encode('utf-8')).decode('utf-8')
-              payload = {
-                  "message": "chore: [Security Team] Auto-inject security gate workflow",
-                  "content": content_b64,
-                  "branch": default_branch
-              }
-              
-              # 如果是更新现有文件，必须带上原文件的 sha
-              if sha:
-                  payload["sha"] = sha
-
-              # 3. 提交文件到目标仓库
-              put_res = requests.put(url, headers=HEADERS, json=payload)
-              if put_res.status_code in [200, 201]:
-                  print(f"[+] [{repo_name}] 成功注入/更新 security.yml！")
-              elif put_res.status_code == 409:
-                  print(f"[!] [{repo_name}] 冲突或无初始 commit (空仓库)，跳过。")
-              else:
-                  print(f"[!] [{repo_name}] 注入失败 ({put_res.status_code}): {put_res.json().get('message')}")
 
           def send_dingtalk_alert(total_repos, skipped_count, missing_repos):
               """当存在未部署安全检查 workflow 的仓库时，通过钉钉推送告警"""
@@ -212,24 +157,152 @@ jobs:
                   print("[!] 错误：未获取到有效的 GITHUB_TOKEN！")
                   exit(1)
 
-              print(f"[*] 开始巡检组织 '{ORG_NAME}' 的所有仓库...")
+              print(f"[*] 开始扫描组织 '{ORG_NAME}' 的所有仓库...")
               all_repos = get_all_org_repos()
               print(f"[*] 共计检测到 {len(all_repos)} 个仓库。")
 
+              results = []
+              missing = []
               skipped = 0
               for repo in all_repos:
+                  repo_name = repo['name']
                   # 跳过：归档仓库、中央安全仓库本身
-                  if repo.get('archived', False) or repo['name'] == 'sec-workflows':
+                  if repo.get('archived', False) or repo_name == 'sec-workflows':
                       skipped += 1
                       continue
-                  inject_workflow_to_repo(repo)
+
+                  file_path = ".github/workflows/security.yml"
+                  url = f"{GITHUB_API}/repos/{ORG_NAME}/{repo_name}/contents/{file_path}"
+                  res = requests.get(url, headers=HEADERS)
+                  has_security = (res.status_code == 200)
+
+                  results.append({
+                      "name": repo_name,
+                      "default_branch": repo.get('default_branch', 'main'),
+                      "has_security": has_security
+                  })
+                  if not has_security:
+                      missing.append(repo_name)
+                      print(f"[!] [{repo_name}] 未部署 security.yml")
                   # 延迟 0.2s 防止触发 API 限流
                   time.sleep(0.2)
 
-              print(f"[*] 组织级安全巡检完成！检测到 {len(all_repos)} 个仓库，跳过 {skipped} 个，"
-                    f"未部署安全检查 workflow 的仓库 {len(MISSING_WORKFLOW_REPOS)} 个。")
+              # 写入扫描结果，供注入步骤使用
+              result_file = os.path.join(os.environ.get("GITHUB_WORKSPACE", "."), "missing_repos.json")
+              with open(result_file, "w", encoding="utf-8") as f:
+                  json.dump(results, f, ensure_ascii=False)
+              print(f"[*] 扫描结果已写入 {result_file}")
+
+              print(f"[*] 扫描完成！检测到 {len(all_repos)} 个仓库，跳过 {skipped} 个，"
+                    f"未部署安全检查 workflow 的仓库 {len(missing)} 个。")
 
               # 存在未部署仓库时，推送钉钉告警
-              if MISSING_WORKFLOW_REPOS:
-                  send_dingtalk_alert(len(all_repos), skipped, MISSING_WORKFLOW_REPOS)
+              if missing:
+                  send_dingtalk_alert(len(all_repos), skipped, missing)
+          EOF
+
+      # -------------------------------------------------------------
+      # 3b. 注入：仅当 mode=inject 时执行，为未部署的仓库自动注入 security.yml
+      #     （默认 scan 模式仅扫描与告警，不注入）
+      # -------------------------------------------------------------
+      - name: Auto Inject Security Workflows
+        if: github.event.inputs.mode == 'inject'
+        env:
+          GITHUB_TOKEN: ${{ steps.generate-app-token.outputs.token }}
+          ORG_NAME: ${{ github.repository_owner }}
+          FORCE_UPDATE: ${{ github.event.inputs.force_update || 'false' }}
+        run: |
+          python - << 'EOF'
+          import os
+          import json
+          import base64
+          import requests
+          import time
+
+          GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
+          ORG_NAME = os.environ.get("ORG_NAME")
+          FORCE_UPDATE = os.environ.get("FORCE_UPDATE", "false").lower() == "true"
+
+          # 如果是 GHE 私有部署，请将 URL 改为 https://<ghe-domain>/api/v3
+          GITHUB_API = "https://api.github.com"
+
+          HEADERS = {
+              "Authorization": f"Bearer {GITHUB_TOKEN}",
+              "Accept": "application/vnd.github+json"
+          }
+
+          # 自动注入到业务仓库的 Workflow 模板内容
+          WORKFLOW_TEMPLATE = f"""name: Security Gate
+
+          on:
+            pull_request:
+              branches: [ "main", "master", "release/*" ]
+
+          jobs:
+            call-security-central:
+              name: Central Security Gate
+              uses: {ORG_NAME}/sec-workflows/.github/workflows/sonar_sast_check.yml@main
+              secrets: inherit
+          """
+
+          def inject_workflow(repo_name, default_branch):
+              file_path = ".github/workflows/security.yml"
+              url = f"{GITHUB_API}/repos/{ORG_NAME}/{repo_name}/contents/{file_path}"
+
+              # 1. 校验该仓库文件是否已存在
+              res = requests.get(url, headers=HEADERS)
+              sha = None
+
+              if res.status_code == 200:
+                  if not FORCE_UPDATE:
+                      print(f"[-] [{repo_name}] 已经存在 security.yml，跳过（如需覆盖请设置 force_update=true）。")
+                      return
+                  sha = res.json().get('sha')
+                  print(f"[*] [{repo_name}] 已经存在 security.yml，将进行覆盖更新...")
+
+              # 2. 构造 API 请求 Body
+              content_b64 = base64.b64encode(WORKFLOW_TEMPLATE.encode('utf-8')).decode('utf-8')
+              payload = {
+                  "message": "chore: [Security Team] Auto-inject security gate workflow",
+                  "content": content_b64,
+                  "branch": default_branch
+              }
+
+              # 如果是更新现有文件，必须带上原文件的 sha
+              if sha:
+                  payload["sha"] = sha
+
+              # 3. 提交文件到目标仓库
+              put_res = requests.put(url, headers=HEADERS, json=payload)
+              if put_res.status_code in [200, 201]:
+                  print(f"[+] [{repo_name}] 成功注入/更新 security.yml！")
+              elif put_res.status_code == 409:
+                  print(f"[!] [{repo_name}] 冲突或无初始 commit (空仓库)，跳过。")
+              else:
+                  print(f"[!] [{repo_name}] 注入失败 ({put_res.status_code}): {put_res.json().get('message')}")
+
+          if __name__ == "__main__":
+              if not GITHUB_TOKEN:
+                  print("[!] 错误：未获取到有效的 GITHUB_TOKEN！")
+                  exit(1)
+
+              result_file = os.path.join(os.environ.get("GITHUB_WORKSPACE", "."), "missing_repos.json")
+              if not os.path.exists(result_file):
+                  print("[!] 未找到扫描结果文件 missing_repos.json，请先运行扫描步骤。")
+                  exit(1)
+
+              with open(result_file, encoding="utf-8") as f:
+                  results = json.load(f)
+
+              # 未部署的仓库 + (force_update=true 时) 已存在的仓库
+              targets = [r for r in results if not r["has_security"] or FORCE_UPDATE]
+              print(f"[*] 注入模式：扫描仓库 {len(results)} 个，本次注入目标 {len(targets)} 个 "
+                    f"(force_update={FORCE_UPDATE})。")
+
+              for r in targets:
+                  inject_workflow(r["name"], r["default_branch"])
+                  # 延迟 0.2s 防止触发 API 限流
+                  time.sleep(0.2)
+
+              print("[*] 组织级安全注入完成！")
           EOF
