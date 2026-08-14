@@ -212,7 +212,7 @@ def send_scan_alert(org_name, total, skipped, missing):
     """扫描模式：存在未部署仓库时推送告警"""
     repo_list = "\n".join(f"- [{m['name']}]({m['html_url']})" for m in missing)
     text = (
-        "### 🔔 安全检查 Workflow 未部署告警\n"
+        "### 安全检查 Workflow 未部署告警\n"
         "\n"
         f"- **触发时间**: {time.strftime('%Y-%m-%d %H:%M:%S')} \n"
         f"- **组织**: `{org_name}` \n"
@@ -228,7 +228,7 @@ def send_scan_alert(org_name, total, skipped, missing):
 def send_inject_report(org_name, total, success, failed):
     """注入模式：仅当存在注入失败时，推送失败告警"""
     text = (
-        "### ❌ 安全检查 Workflow 自动注入报告\n"
+        "### 安全检查 Workflow 自动注入情况\n"
         "\n"
         f"- **触发时间**: {time.strftime('%Y-%m-%d %H:%M:%S')} \n"
         f"- **组织**: `{org_name}` \n"
