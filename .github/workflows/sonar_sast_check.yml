@@ -33,6 +33,10 @@ on:
         required: false
       CF_ACCESS_CLIENT_SECRET:
         required: false
+      DINGTALK_WEBHOOK:
+        required: false
+      DINGTALK_SECRET:
+        required: false
   # 中央workflow不需要进行检查
   # push:
   #   branches: [ main ]
@@ -330,7 +334,116 @@ jobs:
       #       MAVEN_CMD="$MAVEN_CMD -Dsonar.pullrequest.base=$PR_BASE"
       #     fi
 
-      #     eval $MAVEN_CMD   
+        #   eval $MAVEN_CMD
+
+  # ============================================================
+  # Job 3: 钉钉失败告警 (SCA/SAST 任一质量门或任务执行失败时通知)
+  # ============================================================
+  dingtalk-notify:
+    name: Notify on Security Check Failure (DingTalk)
+    runs-on: ubuntu-latest
+    needs: [sca-check, sast-check]
+    if: always()
+
+    steps:
+      - name: Send Signed DingTalk Notification
+        if: needs.sca-check.result == 'failure' || needs.sast-check.result == 'failure'
+        env:
+          DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
+          DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET }}
+          SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
+          PROJECT_KEY: ${{ env.EFFECTIVE_PROJECT_KEY }}
+          PROJECT_NAME: ${{ env.EFFECTIVE_PROJECT_NAME }}
+        shell: bash
+        run: |
+          # 汇总失败的安全检查项
+          FAILED_CHECKS=""
+          if [ "${{ needs.sca-check.result }}" = "failure" ]; then
+            FAILED_CHECKS="${FAILED_CHECKS} 🛡️ SCA (Trivy 依赖/密钥扫描)"
+          fi
+          if [ "${{ needs.sast-check.result }}" = "failure" ]; then
+            FAILED_CHECKS="${FAILED_CHECKS} 🔍 SAST (SonarQube 代码扫描)"
+          fi
+
+          # 导出环境变量供 Python 读取
+          export FAILED_CHECKS
+          export DINGTALK_WEBHOOK DINGTALK_SECRET SONAR_HOST_URL PROJECT_KEY PROJECT_NAME
+          export GITHUB_REPO="${{ github.repository }}"
+          export GITHUB_REF_NAME="${{ github.ref_name }}"
+          export GITHUB_REF="${{ github.head_ref || github.ref_name }}"
+          export GITHUB_ACTOR="${{ github.actor }}"
+          export GITHUB_RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          # 使用 Python 脚本完成【加签】并发送钉钉请求
+          python3 - << 'EOF'
+          import os
+          import time
+          import hmac
+          import hashlib
+          import base64
+          import urllib.parse
+          import json
+          import urllib.request
+
+          webhook = os.environ.get('DINGTALK_WEBHOOK', '').strip()
+          secret = os.environ.get('DINGTALK_SECRET', '').strip()
+
+          if not webhook or not secret:
+              print("未配置 DINGTALK_WEBHOOK / DINGTALK_SECRET，跳过钉钉通知。")
+              exit(0)
+
+          # 钉钉加签
+          timestamp = str(round(time.time() * 1000))
+          secret_enc = secret.encode('utf-8')
+          string_to_sign = f'{timestamp}\n{secret}'
+          string_to_sign_enc = string_to_sign.encode('utf-8')
+          hmac_code = hmac.new(secret_enc, string_to_sign_enc, digestmod=hashlib.sha256).digest()
+          sign = urllib.parse.quote_plus(base64.b64encode(hmac_code))
+          signed_url = f"{webhook}&timestamp={timestamp}&sign={sign}"
+
+          # 组装 Markdown 消息体
+          failed_checks = os.environ.get('FAILED_CHECKS', '').strip() or '未知'
+          repo = os.environ['GITHUB_REPO']
+          ref_name = os.environ['GITHUB_REF_NAME']
+          ref = os.environ['GITHUB_REF']
+          actor = os.environ['GITHUB_ACTOR']
+          run_url = os.environ['GITHUB_RUN_URL']
+          project_key = os.environ.get('PROJECT_KEY', '')
+          project_name = os.environ.get('PROJECT_NAME', '')
+          sonar_url = os.environ.get('SONAR_HOST_URL', '')
+
+          markdown_text = (
+              "### 🚨 安全质量门未通过"
+              "\n\n"
+              f"- **项目**: `{repo}` ({project_name}) \n"
+              f"- **失败检查**: {failed_checks} \n"
+              f"- **触发分支/PR**: `{ref_name}` / `{ref}` \n"
+              f"- **触发人**: @{actor} \n"
+              f"- **构建状态**: ❌ 质量门未通过 \n"
+              "\n\n"
+              f"- [点击查看 GitHub Action 详情]({run_url}) \n"
+              f"- [点击前往 SonarQube 控制台]({sonar_url}/dashboard?id={project_key}) \n"
+          )
+
+          payload = {
+              "msgtype": "markdown",
+              "markdown": {
+                  "title": "【安全扫描未通过】",
+                  "text": markdown_text
+              }
+          }
+          req = urllib.request.Request(
+              signed_url,
+              data=json.dumps(payload).encode('utf-8'),
+              headers={'Content-Type': 'application/json'}
+          )
+          try:
+              with urllib.request.urlopen(req) as response:
+                  print("钉钉服务器响应:", response.read().decode('utf-8'))
+          except Exception as e:
+              print("发送失败:", e)
+              exit(1)
+          EOF
   # build-and-sast-check:
   #   name: Build and Sonar Check
   #   runs-on: ubuntu-latest
