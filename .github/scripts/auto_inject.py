@@ -126,13 +126,13 @@ def scan_org(org_name, headers):
 
 
 def inject_workflow(org_name, record, force_update, headers):
-    """向单个仓库写入 security.yml，返回 (状态, 描述)"""
+    """向单个仓库写入 hkvax_security.yml，返回 (状态, 描述)"""
     url = f"{GITHUB_API}/repos/{org_name}/{record['name']}/contents/{WORKFLOW_PATH}"
     res = requests.get(url, headers=headers)
     sha = None
     if res.status_code == 200:
         if not force_update:
-            return "skipped", "已存在 security.yml"
+            return "skipped", "已存在 hkvax_security.yml"
         sha = res.json().get("sha")
 
     payload = {
@@ -170,7 +170,7 @@ def inject_all(org_name, headers):
     success, failed = [], []
     for record in targets:
         status, desc = inject_workflow(org_name, record, force_update, headers)
-        if status == "failed":
+        if status == "failed" or status == "skipped":
             failed.append((record["name"], desc))
             print(f"[!] [{record['name']}] 注入失败：{desc}")
         else:
