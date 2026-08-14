@@ -62,22 +62,21 @@ jobs:
     name: SCA Security Scan (Trivy) # Ruleset 可单独把这个 Job 设为强制门槛
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    outputs:
-      scan_status: ${{ steps.evaluate.outputs.scan_status }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # Trivy 检测到 HIGH/CRITICAL 漏洞或密钥即返回非 0（exit-code 1），直接阻断流水线；
+      # 扫描器自身故障同样视为失败并阻断，不区分原因
       - name: Run Trivy SCA Scan
         id: trivy-scan
         uses: aquasecurity/trivy-action@v0.35.0
-        continue-on-error: true  # 扫描器本身故障不阻断流水线，由 Evaluate 步骤判定
         with:
           scan-type: 'fs'
           scan-ref: '.'
           scanners: 'vuln,secret'
-          exit-code: '0'
+          exit-code: '1'
           severity: ${{ inputs.trivy_severity || 'CRITICAL,HIGH' }}
           format: 'table'
           output: 'trivy-results.txt'
@@ -87,31 +86,16 @@ jobs:
         if: always()
         run: |
           echo "## 🛡️ Trivy SCA 依赖与密钥漏洞扫描报告" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.trivy-scan.outcome }}" = "failure" ]; then
+            echo "⚠️ Trivy 扫描失败（流水线已阻断），请查看运行日志定位原因。" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
           if [ -s trivy-results.txt ]; then
             echo '```text' >> $GITHUB_STEP_SUMMARY
             cat trivy-results.txt >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
           else
             echo "✅ 未发现 HIGH / CRITICAL 级别的开源依赖漏洞或敏感信息泄露！" >> $GITHUB_STEP_SUMMARY
-          fi
-
-      # SCA 质量门唯一判定点：区分「质量门未通过（阻断）」与「扫描器故障（放行）」
-      - name: Evaluate Trivy Results
-        id: evaluate
-        if: always()
-        run: |
-          if [ "${{ steps.trivy-scan.outcome }}" = "success" ]; then
-            if [ -s trivy-results.txt ]; then
-              echo "scan_status=gate_failed" >> $GITHUB_OUTPUT
-              echo "### ❌ SCA 质量门未通过（已阻断）" >> $GITHUB_STEP_SUMMARY
-              exit 1
-            fi
-            echo "scan_status=ok" >> $GITHUB_OUTPUT
-            echo "### ✅ SCA 质量门通过" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "scan_status=infra_failed" >> $GITHUB_OUTPUT
-            echo "### ⚠️ Trivy 扫描器故障（已放行，不阻断）" >> $GITHUB_STEP_SUMMARY
-            echo "请检查 runner 网络 / Trivy 依赖库下载是否正常。" >> $GITHUB_STEP_SUMMARY
           fi
   # ============================================================
   # Job 2: SAST 代码质量与安全分析 (SonarQube)
@@ -408,7 +392,7 @@ jobs:
 
     steps:
       - name: Send Signed DingTalk Notification
-        if: needs.sca-check.result == 'failure' || needs.sast-check.result == 'failure' || needs.sca-check.outputs.scan_status == 'infra_failed' || needs.sast-check.outputs.scan_status == 'infra_failed'
+        if: needs.sca-check.result == 'failure' || needs.sast-check.result == 'failure' || needs.sast-check.outputs.scan_status == 'infra_failed'
         env:
           DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
           DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET }}
@@ -421,9 +405,7 @@ jobs:
           FAILED_CHECKS=""
           PIPELINE_NOTES=""
           if [ "${{ needs.sca-check.result }}" = "failure" ]; then
-            FAILED_CHECKS="${FAILED_CHECKS} 🛡️ SCA (Trivy 质量门)"
-          elif [ "${{ needs.sca-check.outputs.scan_status }}" = "infra_failed" ]; then
-            PIPELINE_NOTES="${PIPELINE_NOTES} 🛡️ Trivy 扫描器故障"
+            FAILED_CHECKS="${FAILED_CHECKS} 🛡️ SCA (Trivy 质量门/扫描失败)"
           fi
           if [ "${{ needs.sast-check.result }}" = "failure" ]; then
             FAILED_CHECKS="${FAILED_CHECKS} 🔍 SAST (SonarQube 质量门/构建)"
