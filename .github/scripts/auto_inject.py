@@ -41,8 +41,11 @@ on:
       - main
       - master
       - uat
+      - release/**
+      - release-*
     paths:
       - '.github/workflows/hkvax_security.yml'
+  workflow_dispatch:
 
 jobs:
   call-security-central:

@@ -17,7 +17,7 @@ on:
           - scan
           - inject
       force_update:
-        description: '仅 inject 模式下生效：是否强行覆盖已存在的 security.yml (true/false)'
+        description: '仅 inject 模式下生效：是否强行覆盖已存在的 hkvax_security.yml (true/false)'
         required: false
         default: 'false'
 
