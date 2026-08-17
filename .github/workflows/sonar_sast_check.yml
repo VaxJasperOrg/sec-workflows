@@ -90,6 +90,11 @@ jobs:
           echo "## 🛡️ Trivy SCA 依赖与密钥漏洞扫描报告" >> $GITHUB_STEP_SUMMARY
           if [ "${{ steps.trivy-scan.outcome }}" = "failure" ]; then
             echo "⚠️ Trivy 扫描失败（流水线已阻断），请查看运行日志定位原因。" >> $GITHUB_STEP_SUMMARY
+            if [ -s trivy-results.txt ]; then
+              echo '```text' >> $GITHUB_STEP_SUMMARY
+              cat trivy-results.txt >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+            fi
             exit 0
           fi
           if [ -s trivy-results.txt ]; then
