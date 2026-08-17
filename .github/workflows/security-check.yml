@@ -334,7 +334,6 @@ jobs:
             exit 1
           else
             echo "scan_status=infra_failed" >> $GITHUB_OUTPUT
-            echo "### ⚠️ SonarQube 扫描故障（已放行，不阻断）" >> $GITHUB_STEP_SUMMARY
           fi
 
       # 模式 B：纯非 Java 项目 (Node.js/Python 等) —— 使用官方 CLI 动作扫描

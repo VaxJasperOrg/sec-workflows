@@ -52,11 +52,11 @@
 - 5.3 质量门失败时的钉钉告警（SCA/SAST 分类状态展示）
 
 ## 6. 日常运维
-- 7.1 中央 Workflow 版本更新（业务仓库通过 `@main` 自动跟随）
-- 7.2 排除特定仓库不执行安全扫描（从 Ruleset 范围移除）
-- 7.3 质量门阈值调整（`trivy_severity`、`quality_gate_fail` 参数）
-- 7.4 SonarQube Dashboard 查看路径（Job Summary 中的链接说明）
-- 7.5 常见故障排查
+- 6.1 中央 Workflow 版本更新（业务仓库通过 `@main` 自动跟随）
+- 6.2 排除特定仓库不执行安全扫描（从 Ruleset 范围移除）
+- 6.3 质量门阈值调整（`trivy_severity`、`quality_gate_fail` 参数）
+- 6.4 SonarQube Dashboard 查看路径（Job Summary 中的链接说明）
+- 6.5 常见故障排查
   - Trivy 扫描器故障（网络/DB 下载问题）
   - SonarQube 连接失败（认证/服务不可用）
   - `secrets: inherit` 不生效（检查 Org Secrets 配置）
