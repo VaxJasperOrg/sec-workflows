@@ -320,7 +320,8 @@ jobs:
             MAVEN_CMD="$MAVEN_CMD -Dsonar.qualitygate.wait=true"
           fi
 
-          eval $MAVEN_CMD 2>&1 | tee /tmp/sonar-maven-output.log || true
+          eval $MAVEN_CMD 2>&1 | tee /tmp/sonar-maven-output.log
+          exit ${PIPESTATUS[0]}
 
       # 区分 Maven 扫描失败原因：质量门未通过 vs 基础设施故障
       - name: Classify Maven Sonar Failure Reason
