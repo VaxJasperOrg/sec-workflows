@@ -251,6 +251,7 @@ jobs:
 
       # 关键步骤：在扫描前，确保sonarquebe已经有对应的project
       - name: Ensure SonarQube Project Exists
+        id: ensure-project
         continue-on-error: true  # SonarQube 连接/认证故障不阻断，由扫描结果判定
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -281,6 +282,7 @@ jobs:
           else
             echo "Error creating SonarQube project! HTTP Code: $HTTP_CODE"
             echo "Response: $BODY"
+            echo "ensure_failed=true" >> $GITHUB_OUTPUT
             exit 1
           fi
       
@@ -327,8 +329,11 @@ jobs:
         run: |
           if grep -qiE "quality.gate|Quality Gate status" /tmp/sonar-maven-output.log 2>/dev/null; then
             echo "scan_status=gate_failed" >> $GITHUB_OUTPUT
+            echo "### ❌ SAST 质量门未通过（已阻断）" >> $GITHUB_STEP_SUMMARY
+            exit 1
           else
             echo "scan_status=infra_failed" >> $GITHUB_OUTPUT
+            echo "### ⚠️ SonarQube 扫描故障（已放行，不阻断）" >> $GITHUB_STEP_SUMMARY
           fi
 
       # 模式 B：纯非 Java 项目 (Node.js/Python 等) —— 使用官方 CLI 动作扫描
@@ -376,10 +381,14 @@ jobs:
           elif [ "${{ steps.quality-gate-check.outcome }}" = "failure" ]; then
             echo "scan_status=gate_failed" >> $GITHUB_OUTPUT
             echo "### ❌ SAST 质量门未通过（已阻断）" >> $GITHUB_STEP_SUMMARY
-          elif [ "${{ steps.sonar-maven-classify.outputs.scan_status }}" = "infra_failed" ] || [ "${{ steps.sonar-cli-scan.outcome }}" = "failure" ]; then
+          elif [ "${{ steps.ensure-project.outputs.ensure_failed }}" = "true" ] || [ "${{ steps.sonar-maven-classify.outputs.scan_status }}" = "infra_failed" ] || [ "${{ steps.sonar-cli-scan.outcome }}" = "failure" ]; then
             echo "scan_status=infra_failed" >> $GITHUB_OUTPUT
             echo "### ⚠️ SonarQube 扫描故障（已放行，不阻断）" >> $GITHUB_STEP_SUMMARY
-            echo "请检查 SonarQube 服务/连接凭据是否正常。" >> $GITHUB_STEP_SUMMARY
+            if [ "${{ steps.ensure-project.outputs.ensure_failed }}" = "true" ]; then
+              echo "原因：SonarQube 项目创建/查询失败，请检查项目权限。" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "请检查 SonarQube 服务/连接凭据是否正常。" >> $GITHUB_STEP_SUMMARY
+            fi
           else
             echo "scan_status=ok" >> $GITHUB_OUTPUT
             echo "### ℹ️ SAST 扫描未执行或未开启质量门" >> $GITHUB_STEP_SUMMARY
@@ -418,7 +427,7 @@ jobs:
 
     steps:
       - name: Send Signed DingTalk Notification
-        if: needs.sca-check.result == 'failure' || needs.sast-check.result == 'failure' || needs.sast-check.outputs.scan_status == 'infra_failed'
+        if: needs.sca-check.result == 'failure' || needs.sast-check.result == 'failure' || needs.sast-check.outputs.scan_status == 'infra_failed' || needs.sast-check.outputs.scan_status == 'gate_failed'
         env:
           DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
           DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET }}
