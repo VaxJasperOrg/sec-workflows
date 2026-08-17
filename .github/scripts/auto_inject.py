@@ -35,6 +35,14 @@ WORKFLOW_TEMPLATE = """name: Security Gate
 on:
   pull_request:
     branches: [ "main", "master", "release/*" ]             # 这里需要根据实际情况修改
+  # 1. 当该 workflow 配置文件本身被提交或合并到目标分支时自动触发（作为 Baseline）
+  push:
+    branches:
+      - main
+      - master
+      - uat
+    paths:
+      - '.github/workflows/hkvax_security.yml'
 
 jobs:
   call-security-central:
