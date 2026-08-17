@@ -1,0 +1,588 @@
+name: Security Check
+
+on: 
+  workflow_call:
+    inputs:
+      # 将 inputs 设置为可选，并自动推导默认值
+      project_key:
+        description: 'SonarQube Project Key'
+        required: false
+        type: string
+        default: ${{ github.repository_owner }}_${{ github.event.repository.name }}
+      project_name:
+        description: 'SonarQube Project Name'
+        required: false
+        type: string
+        default: ${{ github.event.repository.name }}
+      quality_gate_fail:
+        description: 'Fail pipeline on Sonar Quality Gate failure?'
+        required: false
+        type: boolean
+        default: true
+      trivy_severity:
+        description: 'Trivy severities (comma-separated)'
+        required: false
+        type: string
+        default: 'CRITICAL,HIGH'
+    secrets:
+      SONAR_HOST_URL:
+        required: false
+      SONAR_TOKEN:
+        required: false
+      CF_ACCESS_CLIENT_ID:
+        required: false
+      CF_ACCESS_CLIENT_SECRET:
+        required: false
+      DINGTALK_WEBHOOK:
+        required: false
+      DINGTALK_SECRET:
+        required: false
+  # 中央workflow不需要进行检查
+  # push:
+  #   branches: [ main ]
+  workflow_dispatch: 
+    inputs:
+      quality_gate_fail:
+        description: 'Fail pipeline on Quality Gate failure?'
+        required: false
+        type: boolean
+        default: true
+  schedule:
+    - cron: '0 1 * * *'  # UTC 01:00 = 北京时间 09:00，触发组织级 SCA 每日巡检
+env:
+  EFFECTIVE_PROJECT_KEY: ${{ inputs.project_key || format('{0}_{1}', github.repository_owner, github.event.repository.name) }}
+  EFFECTIVE_PROJECT_NAME: ${{ inputs.project_name || github.event.repository.name }}
+  SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL || 'https://appscan.vax-s.com' }}   # 生产环境sonar host地址
+  SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+  QUALITY_GATE_FAIL: ${{ inputs.quality_gate_fail != false && github.event.inputs.quality_gate_fail != 'false' }}
+  # CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+  # CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+  CF_PROXY_PORT: '8888'
+  
+jobs:
+  sca-check:
+    name: SCA Security Scan (Trivy) # Ruleset 可单独把这个 Job 设为强制门槛
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      scan_status: ${{ steps.sca-status.outputs.scan_status }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Trivy 检测到 HIGH/CRITICAL 漏洞或密钥即返回非 0（exit-code 1），直接阻断流水线；
+      # 扫描器自身故障同样视为失败并阻断，不区分原因
+      - name: Run Trivy SCA Scan
+        id: trivy-scan
+        uses: aquasecurity/trivy-action@v0.35.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          scanners: 'vuln,secret'
+          exit-code: '1'
+          severity: ${{ inputs.trivy_severity || 'CRITICAL,HIGH' }}
+          format: 'table'
+          output: 'trivy-results.txt'
+          ignore-unfixed: true
+
+      - name: Publish Trivy Scan to Job Summary
+        if: always()
+        run: |
+          echo "## 🛡️ Trivy SCA 依赖与密钥漏洞扫描报告" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.trivy-scan.outcome }}" = "failure" ]; then
+            echo "⚠️ Trivy 扫描失败（流水线已阻断），请查看运行日志定位原因。" >> $GITHUB_STEP_SUMMARY
+            if [ -s trivy-results.txt ]; then
+              echo '```text' >> $GITHUB_STEP_SUMMARY
+              cat trivy-results.txt >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+            fi
+            exit 0
+          fi
+          if [ -s trivy-results.txt ]; then
+            echo '```text' >> $GITHUB_STEP_SUMMARY
+            cat trivy-results.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ 未发现 HIGH / CRITICAL 级别的开源依赖漏洞或敏感信息泄露！" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      # 汇总 SCA 状态（用于钉钉告警分类展示；job 已因 Trivy 失败而阻断）
+      - name: Summarize SCA Result Status
+        id: sca-status
+        if: always()
+        run: |
+          if [ "${{ steps.trivy-scan.outcome }}" = "success" ]; then
+            echo "scan_status=ok" >> $GITHUB_OUTPUT
+            echo "### ✅ SCA 质量门通过" >> $GITHUB_STEP_SUMMARY
+          elif grep -qiE 'CRITICAL|HIGH' trivy-results.txt 2>/dev/null; then
+            echo "scan_status=gate_failed" >> $GITHUB_OUTPUT
+            echo "### ❌ SCA 质量门未通过（已阻断）" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "scan_status=scanner_failed" >> $GITHUB_OUTPUT
+            echo "### ⚠️ Trivy 扫描器故障（已阻断）" >> $GITHUB_STEP_SUMMARY
+          fi
+  # ============================================================
+  # Job 2: SAST 代码质量与安全分析 (SonarQube)
+  # ============================================================
+  sast-check:
+    name: SAST Code Scan (SonarQube) # 可以与 SCA 并行运行，互不干扰
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name != 'schedule'  # 计划任务只做SCA扫描，不做代码安全扫描
+    outputs:
+      scan_status: ${{ steps.sast-status.outputs.scan_status }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect Project Tech Stack & Languages
+        id: detect
+        run: |
+          HAS_MAVEN=false
+          HAS_NODE=false
+          HAS_PYTHON=false
+          SOURCES_LIST=""
+
+          # 探测 Java / Maven
+          if [ -f "pom.xml" ]; then
+            HAS_MAVEN=true
+            echo "Detected Maven project (pom.xml found)."
+          fi
+
+          # 探测 Node.js / JavaScript / TypeScript
+          if [ -f "package.json" ] || [ -d "src/javascript" ] || [ -n "$(find . -maxdepth 3 -name '*.js' -o -name '*.ts' 2>/dev/null)" ]; then
+            HAS_NODE=true
+            echo "Detected JavaScript/TypeScript code."
+          fi
+
+          # 探测 Python
+          if [ -f "requirements.txt" ] || [ -f "pyproject.toml" ] || [ -d "src/python" ] || [ -n "$(find . -maxdepth 3 -name '*.py' 2>/dev/null)" ]; then
+            HAS_PYTHON=true
+            echo "Detected Python code."
+          fi
+
+          # 动态拼接需要扫描的源码路径
+          DETECTED_DIRS=""
+          for dir in src/main/java src/python src/javascript lib app; do
+            if [ -d "$dir" ]; then
+              DETECTED_DIRS="${DETECTED_DIRS:+${DETECTED_DIRS},}${dir}"
+            fi
+          done
+          [ -z "$DETECTED_DIRS" ] && DETECTED_DIRS="."
+
+          echo "has_maven=${HAS_MAVEN}" >> $GITHUB_OUTPUT
+          echo "has_node=${HAS_NODE}" >> $GITHUB_OUTPUT
+          echo "has_python=${HAS_PYTHON}" >> $GITHUB_OUTPUT
+          echo "sources=${DETECTED_DIRS}" >> $GITHUB_OUTPUT
+      - name: Set up JDK 17
+        if: steps.detect.outputs.has_maven == 'true'
+        continue-on-error: true
+        uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'maven'
+      - name: Set up Node.js
+        if: steps.detect.outputs.has_node == 'true'
+        continue-on-error: true
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: '**/package-lock.json'
+      - name: Set up Python
+        if: steps.detect.outputs.has_python == 'true'
+        continue-on-error: true
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: '**/requirements.txt'
+      - name: Install JS & Python Dependencies
+        continue-on-error: true
+        run: |
+          if [ "${{ steps.detect.outputs.has_node }}" = "true" ]; then
+            if [ -f src/javascript/package.json ]; then
+              (cd src/javascript && npm ci || npm install)
+            elif [ -f package.json ]; then
+              npm ci || npm install
+            fi
+          fi
+
+          if [ "${{ steps.detect.outputs.has_python }}" = "true" ]; then
+            if [ -f src/python/requirements.txt ]; then
+              pip install -r src/python/requirements.txt
+            elif [ -f requirements.txt ]; then
+              pip install -r requirements.txt
+            fi
+          fi
+      # --------------------------------------------------------
+      # Step 3: 启动 Cloudflare Access Sidecar 代理 (如有必要)
+      # --------------------------------------------------------
+      # - name: Start Cloudflare Access Sidecar Proxy
+      #   if: env.CF_ACCESS_CLIENT_ID != '' && env.CF_ACCESS_CLIENT_SECRET != ''
+      #   run: |
+      #     python proxy/cf-access-proxy.py --port "${CF_PROXY_PORT}" --target-url "${SONAR_HOST_URL}" &> /tmp/cf-proxy.log &
+      #     echo $! > /tmp/cf-proxy.pid
+      #     READY=false
+      #     for i in $(seq 1 10); do
+      #       if curl -s -o /dev/null http://localhost:${CF_PROXY_PORT}/api/server/version 2>/dev/null; then
+      #         READY=true; echo "Proxy connected."; break
+      #       fi
+      #       sleep 1
+      #     done
+      #     if [ "$READY" = false ]; then echo "::error::Proxy failed."; cat /tmp/cf-proxy.log; exit 1; fi
+
+      # - name: Determine Sonar Target URL
+      #   id: sonar-endpoint
+      #   run: |
+      #     if [ -f /tmp/cf-proxy.pid ]; then
+      #       echo "url=http://localhost:${CF_PROXY_PORT}" >> $GITHUB_OUTPUT
+      #     else
+      #       echo "url=${SONAR_HOST_URL}" >> $GITHUB_OUTPUT
+      #     fi
+      - name: Cache SonarQube packages
+        continue-on-error: true
+        uses: actions/cache@v4
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: ${{ runner.os }}-sonar
+
+      # 关键步骤：在扫描前，确保sonarquebe已经有对应的project
+      - name: Ensure SonarQube Project Exists
+        continue-on-error: true  # SonarQube 连接/认证故障不阻断，由扫描结果判定
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        run: |
+          PROJECT_KEY="${{ inputs.project_key }}"
+          PROJECT_NAME="${{ inputs.project_name }}"
+          # 主分支固定优先取 repository 的默认主分支（如 main/master），避免被 PR 临时分支污染
+          MAIN_BRANCH="${{ github.event.repository.default_branch || 'main' }}"
+
+          echo "Checking/Ensuring project '$PROJECT_KEY' exists in SonarQube..."
+
+          # 1. 直接尝试创建项目，捕获 HTTP 响应码及响应体
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST -u "$SONAR_TOKEN:" \
+            "$SONAR_HOST_URL/api/projects/create" \
+            --data-urlencode "project=$PROJECT_KEY" \
+            --data-urlencode "name=$PROJECT_NAME" \
+            --data-urlencode "mainBranch=$MAIN_BRANCH")
+          echo "$RESPONSE"
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+
+          # 2. 判断返回状态
+          if [ "$HTTP_CODE" -eq 200 ]; then
+            echo "Successfully created project '$PROJECT_KEY' with mainBranch='$MAIN_BRANCH'."
+          elif [ "$HTTP_CODE" -eq 400 ] && echo "$BODY" | grep -q "already exists"; then
+            echo "Project '$PROJECT_KEY' already exists. Proceeding..."
+          else
+            echo "Error creating SonarQube project! HTTP Code: $HTTP_CODE"
+            echo "Response: $BODY"
+            exit 1
+          fi
+      
+      # 模式 A：包含 Maven/Java 项目 —— 先构建（编译失败正常阻断），再单独执行 Sonar 扫描
+      - name: Build Project (Maven)
+        id: build-maven
+        if: steps.detect.outputs.has_maven == 'true'
+        run: |
+          mvn -B verify -DskipTests
+
+      # 模式 A：使用 Maven 插件执行扫描（连接/认证故障不阻断，由 Quality Gate Check 负责阻断）
+      - name: Sonar Scan via Maven Plugin (Java / Hybrid)
+        id: sonar-maven-scan
+        if: steps.detect.outputs.has_maven == 'true'
+        continue-on-error: true
+        run: |
+          PR_KEY="${{ github.event.pull_request.number }}"
+          PR_BRANCH="${{ github.event.pull_request.head.ref }}"
+          PR_BASE="${{ github.event.pull_request.base.ref }}"
+
+          MAVEN_CMD="mvn -B org.sonarsource.scanner.maven:sonar-maven-plugin:5.7.0.6970:sonar -DskipTests"
+          MAVEN_CMD="$MAVEN_CMD -Dsonar.host.url=${SONAR_HOST_URL}"
+          MAVEN_CMD="$MAVEN_CMD -Dsonar.token=${SONAR_TOKEN}"
+          MAVEN_CMD="$MAVEN_CMD -Dsonar.projectKey=${EFFECTIVE_PROJECT_KEY}"
+          MAVEN_CMD="$MAVEN_CMD -Dsonar.projectName=${EFFECTIVE_PROJECT_NAME}"
+          MAVEN_CMD="$MAVEN_CMD -Dsonar.sources=${{ steps.detect.outputs.sources }}"
+          # MAVEN_CMD="$MAVEN_CMD -Dsonar.exclusions=**/node_modules/**,**/venv/**,**/*.min.js,proxy/**"
+
+          if [ -n "$PR_KEY" ]; then
+            MAVEN_CMD="$MAVEN_CMD -Dsonar.pullrequest.key=$PR_KEY -Dsonar.pullrequest.branch=$PR_BRANCH -Dsonar.pullrequest.base=$PR_BASE"
+          fi
+
+          eval $MAVEN_CMD
+      # 模式 B：纯非 Java 项目 (Node.js/Python 等) —— 使用官方 CLI 动作扫描
+      - name: Sonar Scan via CLI Action (Non-Maven / Script Languages)
+        id: sonar-cli-scan
+        if: steps.detect.outputs.has_maven != 'true'
+        continue-on-error: true
+        uses: SonarSource/sonarqube-scan-action@v6.0.0
+        env:
+          SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
+          SONAR_TOKEN: ${{ env.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.projectKey=${{ env.EFFECTIVE_PROJECT_KEY }}
+            -Dsonar.projectName="${{ env.EFFECTIVE_PROJECT_NAME }}"
+            -Dsonar.sources=${{ steps.detect.outputs.sources }}
+            -Dsonar.sourceEncoding=UTF-8
+            -Dsonar.exclusions=**/node_modules/**,**/venv/**,**/target/**,**/*.min.js,proxy/**
+            ${{ github.event.pull_request.number && format('-Dsonar.pullrequest.key={0} -Dsonar.pullrequest.branch={1} -Dsonar.pullrequest.base={2}', github.event.pull_request.number, github.event.pull_request.head.ref, github.event.pull_request.base.ref) || '' }}
+      
+      # 【关键判定点】SAST 唯一质量门：任一扫描路径成功且开启质量门时，检查 SonarQube Gate 状态；
+      # 扫描因连接/认证等故障失败时不判定，直接放行（由 dingtalk-notify 提醒）
+      - name: SonarQube Quality Gate Check
+        id: quality-gate-check
+        if: (steps.sonar-maven-scan.outcome == 'success' || steps.sonar-cli-scan.outcome == 'success') && env.QUALITY_GATE_FAIL == 'true'
+        uses: SonarSource/sonarqube-quality-gate-action@v1
+        timeout-minutes: 5
+        env:
+          SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
+          SONAR_TOKEN: ${{ env.SONAR_TOKEN }}
+
+      # 汇总 SAST 状态并写入 Job Summary（区分质量门/构建/扫描故障）
+      - name: Summarize SAST Result Status
+        id: sast-status
+        if: always()
+        run: |
+          if [ "${{ steps.build-maven.outcome }}" = "failure" ]; then
+            echo "scan_status=build_failed" >> $GITHUB_OUTPUT
+            echo "### ❌ Maven 构建失败（已阻断）" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ steps.quality-gate-check.outcome }}" = "success" ]; then
+            echo "scan_status=ok" >> $GITHUB_OUTPUT
+            echo "### ✅ SAST 质量门通过" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ steps.quality-gate-check.outcome }}" = "failure" ]; then
+            echo "scan_status=gate_failed" >> $GITHUB_OUTPUT
+            echo "### ❌ SAST 质量门未通过（已阻断）" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ steps.sonar-maven-scan.outcome }}" = "failure" ] || [ "${{ steps.sonar-cli-scan.outcome }}" = "failure" ]; then
+            echo "scan_status=infra_failed" >> $GITHUB_OUTPUT
+            echo "### ⚠️ SonarQube 扫描故障（已放行，不阻断）" >> $GITHUB_STEP_SUMMARY
+            echo "请检查 SonarQube 服务/连接凭据是否正常。" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "scan_status=ok" >> $GITHUB_OUTPUT
+            echo "### ℹ️ SAST 扫描未执行或未开启质量门" >> $GITHUB_STEP_SUMMARY
+          fi
+      # --------------------------------------------------------
+      # Step 5: 后置清理与总结报告
+      # --------------------------------------------------------
+      - name: Cleanup Sidecar Proxy
+        if: always()
+        run: |
+          if [ -f /tmp/cf-proxy.pid ]; then
+            kill $(cat /tmp/cf-proxy.pid) 2>/dev/null || true
+            rm -f /tmp/cf-proxy.pid
+          fi
+
+      - name: Publish SonarQube Summary
+        if: always()
+        env:
+          SONAR_HOST: ${{ env.SONAR_HOST_URL || 'https://appscan.vax-s.com' }}
+          PROJ_KEY: ${{ env.EFFECTIVE_PROJECT_KEY }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+        run: |
+          echo "### 📊 SonarQube Quality Scan Finished" >> $GITHUB_STEP_SUMMARY
+          echo "Detected Maven: \`${{ steps.detect.outputs.has_maven }}\` | Node.js: \`${{ steps.detect.outputs.has_node }}\` | Python: \`${{ steps.detect.outputs.has_python }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "Analyzed Sources: \`${{ steps.detect.outputs.sources }}\`" >> $GITHUB_STEP_SUMMARY
+      
+
+  # ============================================================
+  # Job 3: 钉钉失败告警 (SCA/SAST 任一质量门或任务执行失败时通知)
+  # ============================================================
+  dingtalk-notify:
+    name: Notify on Security Check Failure (DingTalk)
+    runs-on: ubuntu-latest
+    needs: [sca-check, sast-check]
+    if: always()
+
+    steps:
+      - name: Send Signed DingTalk Notification
+        if: needs.sca-check.result == 'failure' || needs.sast-check.result == 'failure' || needs.sast-check.outputs.scan_status == 'infra_failed'
+        env:
+          DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
+          DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET }}
+          SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
+          PROJECT_KEY: ${{ env.EFFECTIVE_PROJECT_KEY }}
+          PROJECT_NAME: ${{ env.EFFECTIVE_PROJECT_NAME }}
+        shell: bash
+        run: |
+          # 分别汇总 SCA 与 SAST 的扫描状态（质量门失败 / 扫描器故障 / 构建失败 / 通过）
+          if [ "${{ needs.sca-check.outputs.scan_status }}" = "gate_failed" ]; then
+            SCA_STATUS="质量门未通过（已阻断）"
+          elif [ "${{ needs.sca-check.outputs.scan_status }}" = "scanner_failed" ]; then
+            SCA_STATUS="扫描器故障（已阻断）"
+          elif [ "${{ needs.sca-check.result }}" = "failure" ]; then
+            SCA_STATUS="扫描失败（已阻断）"
+          elif [ "${{ needs.sca-check.result }}" = "skipped" ]; then
+            SCA_STATUS="未执行"
+          else
+            SCA_STATUS="通过"
+          fi
+
+          if [ "${{ needs.sast-check.outputs.scan_status }}" = "gate_failed" ]; then
+            SAST_STATUS="质量门未通过（已阻断）"
+          elif [ "${{ needs.sast-check.outputs.scan_status }}" = "build_failed" ]; then
+            SAST_STATUS="构建失败（已阻断）"
+          elif [ "${{ needs.sast-check.outputs.scan_status }}" = "infra_failed" ]; then
+            SAST_STATUS="扫描器故障（已放行）"
+          elif [ "${{ needs.sast-check.result }}" = "failure" ]; then
+            SAST_STATUS="扫描失败（已阻断）"
+          elif [ "${{ needs.sast-check.result }}" = "skipped" ]; then
+            SAST_STATUS="未执行"
+          else
+            SAST_STATUS="通过"
+          fi
+
+          # 标题：存在质量门/构建失败按「未通过」，否则按「扫描器故障提醒」
+          if [ "$SCA_STATUS" = "质量门未通过（已阻断）" ] || [ "$SAST_STATUS" = "质量门未通过（已阻断）" ] || [ "$SAST_STATUS" = "构建失败（已阻断）" ]; then
+            DINGTALK_TITLE="【安全扫描未通过】"
+          else
+            DINGTALK_TITLE="【安全扫描器故障提醒】"
+          fi
+
+          # 导出环境变量供 Python 读取
+          export SCA_STATUS SAST_STATUS DINGTALK_TITLE
+          export DINGTALK_WEBHOOK DINGTALK_SECRET SONAR_HOST_URL PROJECT_KEY PROJECT_NAME
+          export GITHUB_REPO="${{ github.repository }}"
+          export GITHUB_REF_NAME="${{ github.ref_name }}"
+          export GITHUB_REF="${{ github.head_ref || github.ref_name }}"
+          export GITHUB_ACTOR="${{ github.actor }}"
+          export GITHUB_RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          # 使用 Python 脚本完成【加签】并发送钉钉请求
+          python3 - << 'EOF'
+          import os
+          import time
+          import hmac
+          import hashlib
+          import base64
+          import urllib.parse
+          import json
+          import urllib.request
+
+          webhook = os.environ.get('DINGTALK_WEBHOOK', '').strip()
+          secret = os.environ.get('DINGTALK_SECRET', '').strip()
+
+          if not webhook or not secret:
+              print("未配置 DINGTALK_WEBHOOK / DINGTALK_SECRET，跳过钉钉通知。")
+              exit(0)
+
+          # 钉钉加签
+          timestamp = str(round(time.time() * 1000))
+          secret_enc = secret.encode('utf-8')
+          string_to_sign = f'{timestamp}\n{secret}'
+          string_to_sign_enc = string_to_sign.encode('utf-8')
+          hmac_code = hmac.new(secret_enc, string_to_sign_enc, digestmod=hashlib.sha256).digest()
+          sign = urllib.parse.quote_plus(base64.b64encode(hmac_code))
+          signed_url = f"{webhook}&timestamp={timestamp}&sign={sign}"
+
+          # 组装 Markdown 消息体
+          sca_status = os.environ.get('SCA_STATUS', '未知')
+          sast_status = os.environ.get('SAST_STATUS', '未知')
+          title = os.environ.get('DINGTALK_TITLE', '【安全扫描通知】')
+          repo = os.environ['GITHUB_REPO']
+          ref_name = os.environ['GITHUB_REF_NAME']
+          ref = os.environ['GITHUB_REF']
+          actor = os.environ['GITHUB_ACTOR']
+          run_url = os.environ['GITHUB_RUN_URL']
+          project_key = os.environ.get('PROJECT_KEY', '')
+          project_name = os.environ.get('PROJECT_NAME', '')
+          sonar_url = os.environ.get('SONAR_HOST_URL', '')
+
+          markdown_text = (
+              "### 安全检查结果"
+              "\n\n"
+              f"- **项目**: `{repo}` ({project_name}) \n"
+              f"- **触发分支/PR**: `{ref_name}` / `{ref}` \n"
+              f"- **触发人**: @{actor} \n"
+              "\n"
+              "| 检查项 | 状态 |\n"
+              "| --- | --- |\n"
+              f"| SCA (Trivy) | {sca_status} |\n"
+              f"| SAST (SonarQube) | {sast_status} |\n"
+              "\n"
+              f"- [点击查看 GitHub Action 详情]({run_url}) \n"
+              f"- [点击前往 SonarQube 控制台]({sonar_url}/dashboard?id={project_key}) \n"
+          )
+
+          payload = {
+              "msgtype": "markdown",
+              "markdown": {
+                  "title": title,
+                  "text": markdown_text
+              }
+          }
+          req = urllib.request.Request(
+              signed_url,
+              data=json.dumps(payload).encode('utf-8'),
+              headers={'Content-Type': 'application/json'}
+          )
+          try:
+              with urllib.request.urlopen(req) as response:
+                  print("钉钉服务器响应:", response.read().decode('utf-8'))
+          except Exception as e:
+              print("发送失败:", e)
+              exit(1)
+          EOF
+
+  # ============================================================
+  # Job 4: SCA 组织级每日巡检（仅 schedule 触发）
+  # 对已接入 hkvax_security.yml 的仓库逐一执行 Trivy SCA 扫描，
+  # 汇总漏洞报告写入 Job Summary，钉钉推送摘要通知。
+  # ============================================================
+  sca-daily-scan:
+    name: SCA Daily Scan (Trivy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    if: github.event_name != 'workflow_call' 
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate GitHub App Token
+        id: generate-app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Install Trivy
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Pre-download Trivy DB
+        run: trivy --download-db-only
+
+      - name: Run SCA Daily Scan
+        env:
+          GITHUB_TOKEN: ${{ steps.generate-app-token.outputs.token }}
+          ORG_NAME: ${{ github.repository_owner }}
+          DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
+          DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET }}
+        run: python .github/scripts/sca_daily_scan.py
+
+      - name: Publish Results to Job Summary
+        if: always()
+        run: |
+          echo "### SCA 每日巡检报告" >> $GITHUB_STEP_SUMMARY
+          if [ -f sca_scan_results.md ]; then
+            cat sca_scan_results.md >> $GITHUB_STEP_SUMMARY
+          else
+            echo "本次巡检无结果或执行异常，请查看运行日志。" >> $GITHUB_STEP_SUMMARY
+          fi
