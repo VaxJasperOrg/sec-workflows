@@ -378,15 +378,22 @@ jobs:
 
       - name: Publish SonarQube Summary
         if: always()
+        env:
+          SONAR_HOST: ${{ env.SONAR_HOST_URL || 'https://appscan.vax-s.com' }}
+          PROJ_KEY: ${{ env.EFFECTIVE_PROJECT_KEY }}
+          PR_NUM: ${{ github.event.pull_request.number }}
         run: |
           echo "### 📊 SonarQube Quality Scan Finished" >> $GITHUB_STEP_SUMMARY
           echo "Detected Maven: \`${{ steps.detect.outputs.has_maven }}\` | Node.js: \`${{ steps.detect.outputs.has_node }}\` | Python: \`${{ steps.detect.outputs.has_python }}\`" >> $GITHUB_STEP_SUMMARY
           echo "Analyzed Sources: \`${{ steps.detect.outputs.sources }}\`" >> $GITHUB_STEP_SUMMARY
-          SONAR_DASH="${{ env.SONAR_HOST_URL }}/dashboard?id=${{ env.EFFECTIVE_PROJECT_KEY }}"
-          if [ -n "${{ github.event.pull_request.number }}" ]; then
-            SONAR_DASH="${SONAR_DASH}&pullRequest=${{ github.event.pull_request.number }}"
+          # 确保协议前缀存在
+          HOST="$SONAR_HOST"
+          if [[ "$HOST" != http* ]]; then HOST="https://${HOST}"; fi
+          DASH="${HOST}/dashboard?id=${PROJ_KEY}"
+          if [ -n "$PR_NUM" ]; then
+            DASH="${DASH}&pullRequest=${PR_NUM}"
           fi
-          echo "[View Dashboard In SonarQube](${SONAR_DASH})" >> $GITHUB_STEP_SUMMARY
+          echo "[View Dashboard In SonarQube](${DASH})" >> $GITHUB_STEP_SUMMARY
       
       # - name: Build and Sonar Check
       #   env:
