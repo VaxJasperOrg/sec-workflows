@@ -239,7 +239,7 @@ def send_inject_report(org_name, total, success, failed):
     if success:
         text += "\n**注入成功仓库**:\n" + "\n".join(f"- `{name}`" for name in success)
     if failed:
-        text += "\n**注入失败仓库**:\n" + "\n".join(f"- `{name}`（{reason}）" for name, reason in failed)
+        text += "\n\n**注入失败仓库**:\n" + "\n".join(f"- `{name}`（{reason}）" for name, reason in failed)
     dingtalk_send("【安全巡检】Workflow 注入失败", text)
 
 
