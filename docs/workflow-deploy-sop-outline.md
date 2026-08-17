@@ -51,17 +51,7 @@
   - 注入结果（成功/失败明细）
 - 5.3 质量门失败时的钉钉告警（SCA/SAST 分类状态展示）
 
-## 6. SCA 每日巡检（集成在 `security-check.yml` 中）
-- 6.1 功能说明：每日对已接入仓库逐一执行 Trivy SCA 扫描，汇总组织级漏洞报告
-- 6.2 触发方式：定时（每天北京时间 09:00），由 `schedule` 触发器自动执行
-- 6.3 运行机制：`sca-daily-scan` job 通过 `if: github.event_name == 'schedule'` 仅在定时触发时运行，与 per-repo 的 `sca-check` / `sast-check` job 互不影响
-- 6.4 扫描范围：仅已部署 `hkvax_security.yml` 的非归档仓库
-- 6.5 运行原理：GitHub App Token → 获取仓库列表 → 逐仓 shallow clone → `trivy fs` 扫描 → 统计 CRITICAL/HIGH → 汇总报告
-- 6.6 钉钉通知：存在漏洞或扫描失败时推送摘要，含 Actions 链接
-- 6.7 所需 Secrets（Org Secrets）：`APP_ID`、`APP_PRIVATE_KEY`、`DINGTALK_WEBHOOK`、`DINGTALK_SECRET`
-- 6.8 与 PR 级 SCA 扫描的关系：PR 级阻断合并，每日巡检提供组织级全局视野
-
-## 7. 日常运维
+## 6. 日常运维
 - 7.1 中央 Workflow 版本更新（业务仓库通过 `@main` 自动跟随）
 - 7.2 排除特定仓库不执行安全扫描（从 Ruleset 范围移除）
 - 7.3 质量门阈值调整（`trivy_severity`、`quality_gate_fail` 参数）
@@ -71,7 +61,7 @@
   - SonarQube 连接失败（认证/服务不可用）
   - `secrets: inherit` 不生效（检查 Org Secrets 配置）
 
-## 8. 各团队操作清单（Checklist）
+## 7. 各团队操作清单（Checklist）
 - GitHub Admin：Rulesets + GitHub App + Org Secrets
 - DevOps：部署 Central 仓库 + 配置 Central Secrets + 验证
 - 开发团队：无需操作（自动注入或手动创建 wrapper 文件）；PR 被阻断时查看 Job Summary

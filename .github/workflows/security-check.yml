@@ -47,8 +47,6 @@ on:
         required: false
         type: boolean
         default: true
-  schedule:
-    - cron: '0 1 * * *'  # UTC 01:00 = 北京时间 09:00，触发组织级 SCA 每日巡检
 env:
   EFFECTIVE_PROJECT_KEY: ${{ inputs.project_key || format('{0}_{1}', github.repository_owner, github.event.repository.name) }}
   EFFECTIVE_PROJECT_NAME: ${{ inputs.project_name || github.event.repository.name }}
@@ -528,61 +526,3 @@ jobs:
               print("发送失败:", e)
               exit(1)
           EOF
-
-  # ============================================================
-  # Job 4: SCA 组织级每日巡检（仅 schedule 触发）
-  # 对已接入 hkvax_security.yml 的仓库逐一执行 Trivy SCA 扫描，
-  # 汇总漏洞报告写入 Job Summary，钉钉推送摘要通知。
-  # ============================================================
-  sca-daily-scan:
-    name: SCA Daily Scan (Trivy)
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    if: github.event_name != 'workflow_call' 
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Generate GitHub App Token
-        id: generate-app-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-
-      - name: Install Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests
-
-      - name: Install Trivy
-        run: |
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
-
-      - name: Pre-download Trivy DB
-        run: trivy --download-db-only
-
-      - name: Run SCA Daily Scan
-        env:
-          GITHUB_TOKEN: ${{ steps.generate-app-token.outputs.token }}
-          ORG_NAME: ${{ github.repository_owner }}
-          DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
-          DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET }}
-        run: python .github/scripts/sca_daily_scan.py
-
-      - name: Publish Results to Job Summary
-        if: always()
-        run: |
-          echo "### SCA 每日巡检报告" >> $GITHUB_STEP_SUMMARY
-          if [ -f sca_scan_results.md ]; then
-            cat sca_scan_results.md >> $GITHUB_STEP_SUMMARY
-          else
-            echo "本次巡检无结果或执行异常，请查看运行日志。" >> $GITHUB_STEP_SUMMARY
-          fi
