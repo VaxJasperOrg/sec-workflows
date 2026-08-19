@@ -330,8 +330,6 @@ jobs:
         run: |
           if grep -qiE "quality.gate|Quality Gate status" /tmp/sonar-maven-output.log 2>/dev/null; then
             echo "scan_status=gate_failed" >> $GITHUB_OUTPUT
-            echo "### ❌ SAST 质量门未通过（已阻断）" >> $GITHUB_STEP_SUMMARY
-            exit 1
           else
             echo "scan_status=infra_failed" >> $GITHUB_OUTPUT
           fi
@@ -378,9 +376,10 @@ jobs:
           elif [ "${{ steps.sonar-maven-classify.outputs.scan_status }}" = "gate_failed" ]; then
             echo "scan_status=gate_failed" >> $GITHUB_OUTPUT
             echo "### ❌ SAST 质量门未通过（已阻断）" >> $GITHUB_STEP_SUMMARY
+            exit 1
           elif [ "${{ steps.quality-gate-check.outcome }}" = "failure" ]; then
             echo "scan_status=gate_failed" >> $GITHUB_OUTPUT
-            echo "### ❌ SAST 质量门未通过（已阻断）" >> $GITHUB_STEP_SUMMARY
+            exit 1
           elif [ "${{ steps.ensure-project.outputs.ensure_failed }}" = "true" ] || [ "${{ steps.sonar-maven-classify.outputs.scan_status }}" = "infra_failed" ] || [ "${{ steps.sonar-cli-scan.outcome }}" = "failure" ]; then
             echo "scan_status=infra_failed" >> $GITHUB_OUTPUT
             echo "### ⚠️ SonarQube 扫描故障（已放行，不阻断）" >> $GITHUB_STEP_SUMMARY
